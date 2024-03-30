@@ -5,7 +5,6 @@ import (
 	// "encoding/json"
 	"bufio"
 	"crypto/sha1"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -80,11 +79,17 @@ func main() {
 		sha1Hash := sha1.New()
 		sha1Hash.Write([]byte(bencode.Encode(info)))
 
-		fmt.Println("encoded??", bencode.Encode(info))
-
 		fmt.Println("Tracker URL:", decoded["announce"])
 		fmt.Println("Length:", info["length"])
-		fmt.Printf("Info Hash: %s\n", hex.EncodeToString(sha1Hash.Sum(nil)))
+		fmt.Printf("Info Hash: %x\n", sha1Hash.Sum(nil))
+		fmt.Println("Piece Length:", info["piece length"])
+		fmt.Println("Piece Hashes")
+
+		// print 20 byte hashes
+		pieceHashes := []byte(info["pieces"].(string))
+		for i := 0; i < len(pieceHashes); i += 20 {
+			fmt.Printf("%x\n", pieceHashes[i:i+20])
+		}
 
 	default:
 		fmt.Println("Unknown command: " + command)
