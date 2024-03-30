@@ -97,6 +97,33 @@ func decodeList(reader *bufio.Reader) ([]interface{}, error) {
 	}
 }
 
+func decodeDictionary(reader *bufio.Reader) (map[string]interface{}, error) {
+
+	dict := make(map[string]interface{})
+
+	list, err := decodeList(reader)
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode dictionary: %v", err)
+	}
+
+	if len(list)%2 != 0 {
+		return nil, fmt.Errorf("dictionary key value mismatch: %d", len(list))
+	}
+
+	for i := 0; i < len(list); i += 2 {
+		key, ok := list[i].(string)
+
+		if !ok {
+			return nil, fmt.Errorf("failed to convert dictionary key to string: %v", list[i])
+		}
+
+		dict[key] = list[i+1]
+	}
+
+	return dict, nil
+}
+
 func decodeBencode(reader *bufio.Reader) (interface{}, error) {
 
 	firstChar, err := reader.ReadByte()
@@ -112,6 +139,8 @@ func decodeBencode(reader *bufio.Reader) (interface{}, error) {
 		return decodeInteger(reader)
 	case firstChar == 'l':
 		return decodeList(reader)
+	case firstChar == 'd':
+		return decodeDictionary(reader)
 	default:
 		return "", fmt.Errorf("unsupported bencode type with byte: %s", string(firstChar))
 	}
