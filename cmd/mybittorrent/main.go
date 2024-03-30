@@ -148,10 +148,19 @@ func decodeBencode(reader *bufio.Reader) (interface{}, error) {
 
 func main() {
 
+	if len(os.Args) < 2 {
+		fmt.Println("No command provided")
+		os.Exit(1)
+	}
+
 	command := os.Args[1]
 
-	if command == "decode" {
-
+	switch command {
+	case "decode":
+		if len(os.Args) < 3 {
+			fmt.Println("No bencoded value provided")
+			os.Exit(1)
+		}
 		bencodedValue := os.Args[2]
 		reader := bufio.NewReader(strings.NewReader(bencodedValue))
 
@@ -164,8 +173,47 @@ func main() {
 
 		jsonOutput, _ := json.Marshal(decoded)
 		fmt.Println(string(jsonOutput))
-	} else {
+	case "info":
+		if len(os.Args) < 3 {
+			fmt.Println("No torrent file provided")
+			os.Exit(1)
+		}
+		torrentFile := os.Args[2]
+		file, err := os.Open(torrentFile)
+
+		if err != nil {
+			fmt.Println("Failed to open torrent file: " + err.Error())
+			os.Exit(1)
+		}
+
+		reader := bufio.NewReader(file)
+
+		res, err := decodeBencode(reader)
+		if err != nil {
+			fmt.Println(err)
+			return
+		}
+
+		decoded, ok := res.(map[string]interface{})
+
+		if !ok {
+			fmt.Println("Failed to convert decoded value to dictionary")
+			os.Exit(1)
+		}
+
+		info, ok := decoded["info"].(map[string]interface{})
+
+		if !ok {
+			fmt.Println("No info dictionary found in torrent file")
+			os.Exit(1)
+		}
+
+		fmt.Println("Tracker URL:", decoded["announce"])
+		fmt.Println("Length:", info["length"])
+
+	default:
 		fmt.Println("Unknown command: " + command)
 		os.Exit(1)
 	}
+
 }
