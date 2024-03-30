@@ -67,7 +67,7 @@ func decodeInteger(reader *bufio.Reader) (int, error) {
 
 func decodeList(reader *bufio.Reader) ([]interface{}, error) {
 
-	var list []interface{}
+	list := make([]interface{}, 0)
 
 	for {
 		nextChar, err := reader.Peek(1)
@@ -127,6 +127,7 @@ func main() {
 		reader := bufio.NewReader(strings.NewReader(bencodedValue))
 
 		decoded, err := decodeBencode(reader)
+
 		if err != nil {
 			fmt.Println(err)
 			return
