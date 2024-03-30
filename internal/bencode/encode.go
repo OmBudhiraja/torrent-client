@@ -1,6 +1,9 @@
 package bencode
 
-import "fmt"
+import (
+	"fmt"
+	"sort"
+)
 
 func Encode(value interface{}) string {
 	switch v := value.(type) {
@@ -13,6 +16,7 @@ func Encode(value interface{}) string {
 	case map[string]interface{}:
 		return encodeDictionary(v)
 	default:
+		fmt.Println("Unsupported type????")
 		return ""
 	}
 }
@@ -38,9 +42,17 @@ func encodeList(value []interface{}) string {
 func encodeDictionary(value map[string]interface{}) string {
 	result := "d"
 
-	for key, item := range value {
+	sortedKeys := make([]string, 0, len(value))
+
+	for key := range value {
+		sortedKeys = append(sortedKeys, key)
+	}
+
+	sort.Strings(sortedKeys)
+
+	for _, key := range sortedKeys {
 		result += encodeString(key)
-		result += Encode(item)
+		result += Encode(value[key])
 	}
 
 	return result + "e"

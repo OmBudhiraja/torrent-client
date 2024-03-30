@@ -80,6 +80,8 @@ func main() {
 		sha1Hash := sha1.New()
 		sha1Hash.Write([]byte(bencode.Encode(info)))
 
+		fmt.Println("encoded??", bencode.Encode(info))
+
 		fmt.Println("Tracker URL:", decoded["announce"])
 		fmt.Println("Length:", info["length"])
 		fmt.Printf("Info Hash: %s\n", hex.EncodeToString(sha1Hash.Sum(nil)))
