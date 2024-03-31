@@ -4,73 +4,18 @@ import (
 	// Uncomment this line to pass the first stage
 	// "encoding/json"
 	"bufio"
-	"crypto/sha1"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"strings"
 
 	"github.com/codecrafters-io/bittorrent-starter-go/internal/bencode"
+	"github.com/codecrafters-io/bittorrent-starter-go/internal/metainfo"
 )
-
-type TorrentInfo struct {
-	TrackerUrl  string
-	InfoHash    []byte
-	Length      int
-	PieceLength int
-	PieceHashes []string
-}
-
-func (t *TorrentInfo) Print() {
-	fmt.Println("Tracker URL:", t.TrackerUrl)
-	fmt.Println("Length:", t.Length)
-	fmt.Printf("Info Hash: %x\n", t.InfoHash)
-	fmt.Println("Piece Length:", t.PieceLength)
-	fmt.Println("Piece Hashes:")
-
-	for _, pieceHash := range t.PieceHashes {
-		fmt.Println(pieceHash)
-	}
-}
-
-func NewTorrentInfo(reader *bufio.Reader) (*TorrentInfo, error) {
-	res, err := bencode.Decode(reader)
-	if err != nil {
-		return nil, err
-	}
-
-	decoded, ok := res.(map[string]interface{})
-
-	if !ok {
-		return nil, fmt.Errorf("failed to convert decoded value to dictionary")
-	}
-
-	info, ok := decoded["info"].(map[string]interface{})
-	if !ok {
-		return nil, fmt.Errorf("no info dictionary found in torrent file")
-	}
-
-	sha1Hash := sha1.New()
-	sha1Hash.Write([]byte(bencode.Encode(info)))
-
-	pieceHashes := []string{}
-	pieceHashesBytes := []byte(info["pieces"].(string))
-
-	for i := 0; i < len(pieceHashesBytes); i += 20 {
-		pieceHashes = append(pieceHashes, fmt.Sprintf("%x", pieceHashesBytes[i:i+20]))
-	}
-
-	return &TorrentInfo{
-		TrackerUrl:  decoded["announce"].(string),
-		InfoHash:    sha1Hash.Sum(nil),
-		Length:      info["length"].(int),
-		PieceLength: info["piece length"].(int),
-		PieceHashes: pieceHashes,
-	}, nil
-}
 
 func main() {
 
@@ -105,23 +50,15 @@ func main() {
 			os.Exit(1)
 		}
 		torrentFile := os.Args[2]
-		file, err := os.Open(torrentFile)
 
-		if err != nil {
-			fmt.Println("Failed to open torrent file: " + err.Error())
-			os.Exit(1)
-		}
-
-		reader := bufio.NewReader(file)
-
-		torrentInfo, err := NewTorrentInfo(reader)
+		metaInfo, err := metainfo.Parse(torrentFile)
 
 		if err != nil {
 			fmt.Println("Failed to parse torrent file: " + err.Error())
 			os.Exit(1)
 		}
 
-		torrentInfo.Print()
+		metaInfo.Print()
 
 	case "peers":
 		if len(os.Args) < 3 {
@@ -130,16 +67,7 @@ func main() {
 		}
 
 		torrentFile := os.Args[2]
-		file, err := os.Open(torrentFile)
-
-		if err != nil {
-			fmt.Println("Failed to open torrent file: " + err.Error())
-			os.Exit(1)
-		}
-
-		reader := bufio.NewReader(file)
-
-		torrentInfo, err := NewTorrentInfo(reader)
+		metaInfo, err := metainfo.Parse(torrentFile)
 
 		if err != nil {
 			fmt.Println("Failed to parse torrent file: " + err.Error())
@@ -148,15 +76,15 @@ func main() {
 
 		params := url.Values{}
 
-		params.Add("info_hash", string(torrentInfo.InfoHash))
+		params.Add("info_hash", string(metaInfo.InfoHash))
 		params.Add("peer_id", "00112233445566778899")
 		params.Add("port", "6881")
 		params.Add("uploaded", "0")
 		params.Add("downloaded", "0")
-		params.Add("left", fmt.Sprintf("%d", torrentInfo.Length))
+		params.Add("left", fmt.Sprintf("%d", metaInfo.Length))
 		params.Add("compact", "1")
 
-		resp, err := http.Get(fmt.Sprintf("%s?%s", torrentInfo.TrackerUrl, params.Encode()))
+		resp, err := http.Get(fmt.Sprintf("%s?%s", metaInfo.TrackerUrl, params.Encode()))
 
 		if err != nil {
 			fmt.Println("Failed to get peers from tracker: " + err.Error())
@@ -193,6 +121,48 @@ func main() {
 			port := binary.BigEndian.Uint16(peersBytes[i+4 : i+6])
 			fmt.Printf("%s:%d\n", ip, port)
 		}
+
+	case "handshake":
+		if len(os.Args) < 4 {
+			fmt.Println("wrong number of arguments for handshake command")
+			os.Exit(1)
+		}
+
+		torrentFile := os.Args[2]
+
+		metaInfo, err := metainfo.Parse(torrentFile)
+
+		if err != nil {
+			fmt.Println("Failed to parse torrent file: " + err.Error())
+			os.Exit(1)
+		}
+
+		conn, err := net.Dial("tcp", os.Args[3])
+
+		if err != nil {
+			fmt.Println("Failed to connect to peer: " + err.Error())
+			os.Exit(1)
+		}
+
+		handShakeMsg := make([]byte, 0)
+
+		handShakeMsg = append(handShakeMsg, 19) // Length of the protocol string
+		handShakeMsg = append(handShakeMsg, []byte("BitTorrent protocol")...)
+		handShakeMsg = append(handShakeMsg, make([]byte, 8)...)                // 8 reserved bytes
+		handShakeMsg = append(handShakeMsg, metaInfo.InfoHash...)              // Info hash
+		handShakeMsg = append(handShakeMsg, []byte("00112233445566778899")...) // Peer ID
+
+		conn.Write(handShakeMsg)
+
+		responseBuffer := make([]byte, 68)
+		_, err = conn.Read(responseBuffer)
+
+		if err != nil {
+			fmt.Println("Failed to read handshake response: " + err.Error())
+			os.Exit(1)
+		}
+
+		fmt.Printf("Peer ID: %x\n", responseBuffer[48:68])
 
 	default:
 		fmt.Println("Unknown command: " + command)
