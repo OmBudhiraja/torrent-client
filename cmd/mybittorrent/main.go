@@ -17,12 +17,21 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
+
+	"math/rand"
 
 	"github.com/codecrafters-io/bittorrent-starter-go/internal/bencode"
 	"github.com/codecrafters-io/bittorrent-starter-go/internal/metainfo"
 )
 
-func getPeers(metaInfo *metainfo.MetaInfo) ([]string, error) {
+type Peer struct {
+	value string
+	mu    sync.Mutex
+}
+
+func getPeers(metaInfo *metainfo.MetaInfo) ([]*Peer, error) {
 	params := url.Values{}
 
 	params.Add("info_hash", string(metaInfo.InfoHash))
@@ -63,12 +72,12 @@ func getPeers(metaInfo *metainfo.MetaInfo) ([]string, error) {
 
 	peersBytes := []byte(peers)
 
-	result := make([]string, len(peersBytes)/6)
+	result := make([]*Peer, len(peersBytes)/6)
 
 	for i := 0; i < len(peersBytes); i += 6 {
 		ip := fmt.Sprintf("%d.%d.%d.%d", peersBytes[i], peersBytes[i+1], peersBytes[i+2], peersBytes[i+3])
 		port := binary.BigEndian.Uint16(peersBytes[i+4 : i+6])
-		result[i/6] = fmt.Sprintf("%s:%d", ip, port)
+		result[i/6] = &Peer{value: fmt.Sprintf("%s:%d", ip, port)}
 	}
 
 	return result, nil
@@ -90,7 +99,11 @@ func handshakePeer(peer string, infoHash []byte) (net.Conn, error) {
 	handShakeMsg = append(handShakeMsg, infoHash...)                       // Info hash
 	handShakeMsg = append(handShakeMsg, []byte("00112233445566778899")...) // Peer ID
 
-	conn.Write(handShakeMsg)
+	_, err = conn.Write(handShakeMsg)
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to send handshake message: %s", err.Error())
+	}
 
 	return conn, nil
 }
@@ -160,7 +173,7 @@ func main() {
 		}
 
 		for _, peer := range peers {
-			fmt.Println(peer)
+			fmt.Println(peer.value)
 		}
 
 	case "handshake":
@@ -189,7 +202,7 @@ func main() {
 		_, err = conn.Read(responseBuffer)
 
 		if err != nil {
-			fmt.Println("Failed to read handshake response: " + err.Error())
+			fmt.Println("Failed to read handshake response: ", err)
 			os.Exit(1)
 		}
 
@@ -203,9 +216,111 @@ func main() {
 
 		outputPath := os.Args[3]
 		torrentFile := os.Args[4]
-		pieceIndex := os.Args[5]
+		pieceIndexStr := os.Args[5]
 
-		downloadPiece(outputPath, torrentFile, pieceIndex)
+		metaInfo, err := metainfo.Parse(torrentFile)
+
+		if err != nil {
+			fmt.Println("Failed to parse torrent file: " + err.Error())
+			os.Exit(1)
+		}
+
+		pieceIndex, err := strconv.Atoi(pieceIndexStr)
+
+		if err != nil {
+			fmt.Println("Invalid piece index: " + err.Error())
+			os.Exit(1)
+		}
+
+		peers, err := getPeers(metaInfo)
+
+		randomPeer := peers[rand.Intn(len(peers))]
+
+		if err != nil {
+			fmt.Println(err)
+			os.Exit(1)
+		}
+
+		res := downloadPiece(metaInfo, pieceIndex, randomPeer.value)
+
+		outFile, err := os.OpenFile(outputPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+
+		if err != nil {
+			fmt.Println("Failed to open output file: " + err.Error())
+			os.Exit(1)
+		}
+
+		defer outFile.Close()
+
+		_, err = outFile.Write(res)
+
+		if err != nil {
+			fmt.Println("Failed to write to output file: " + err.Error())
+			os.Exit(1)
+		}
+
+		fmt.Printf("Piece %d downloaded to %s\n", pieceIndex, outputPath)
+
+	case "download":
+		if len(os.Args) < 5 {
+			fmt.Println("wrong number of arguments for download command")
+			os.Exit(1)
+		}
+
+		outputPath := os.Args[3]
+		torrentFile := os.Args[4]
+
+		metaInfo, err := metainfo.Parse(torrentFile)
+
+		if err != nil {
+			fmt.Println("Failed to parse torrent file: " + err.Error())
+			os.Exit(1)
+		}
+
+		peers, err := getPeers(metaInfo)
+
+		if err != nil {
+			fmt.Println(err)
+			os.Exit(1)
+		}
+
+		fullData := make([][]byte, len(metaInfo.PieceHashes))
+
+		wg := sync.WaitGroup{}
+
+		for i := 0; i < len(metaInfo.PieceHashes); i++ {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+
+				selectedPeer := peers[i%len(peers)]
+				selectedPeer.mu.Lock()
+				defer selectedPeer.mu.Unlock()
+
+				res := downloadPiece(metaInfo, i, selectedPeer.value)
+				fullData[i] = res
+			}(i)
+		}
+
+		wg.Wait()
+
+		outFile, err := os.OpenFile(outputPath, os.O_CREATE|os.O_WRONLY, 0644)
+
+		if err != nil {
+			fmt.Println("Failed to open output file: " + err.Error())
+			os.Exit(1)
+		}
+
+		defer outFile.Close()
+
+		_, err = outFile.Write(bytes.Join(fullData, nil))
+
+		if err != nil {
+			fmt.Println("Failed to write to output file: " + err.Error())
+			os.Exit(1)
+		}
+
+		fmt.Printf("Downloaded %s to %s\n", torrentFile, outputPath)
 
 	default:
 		fmt.Println("Unknown command: " + command)
@@ -228,15 +343,7 @@ const (
 
 const KB16 = 16384
 
-func downloadPiece(outputPath, torrentFile, index string) {
-	metaInfo, err := metainfo.Parse(torrentFile)
-
-	if err != nil {
-		fmt.Println("Failed to parse torrent file: " + err.Error())
-		os.Exit(1)
-	}
-
-	pieceIndex, err := strconv.Atoi(index)
+func downloadPiece(metaInfo *metainfo.MetaInfo, pieceIndex int, peer string) []byte {
 
 	pieceLength := metaInfo.PieceLength
 
@@ -244,30 +351,23 @@ func downloadPiece(outputPath, torrentFile, index string) {
 		pieceLength = metaInfo.Length % pieceLength
 	}
 
-	if err != nil {
-		fmt.Println("Invalid piece index: " + err.Error())
-		os.Exit(1)
-	}
-
-	peers, err := getPeers(metaInfo)
+	conn, err := handshakePeer(peer, metaInfo.InfoHash)
 
 	if err != nil {
 		fmt.Println(err)
 		os.Exit(1)
 	}
 
-	conn, err := handshakePeer(peers[0], metaInfo.InfoHash)
+	defer conn.Close()
 
-	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
-	}
+	// fmt.Println("Downloading piece ", pieceIndex, " from ", peer, "with length ", pieceLength)
 
 	responseBuffer := make([]byte, 68)
+	// _, err = io.ReadFull(conn, responseBuffer)
 	_, err = conn.Read(responseBuffer)
 
 	if err != nil {
-		fmt.Println("Failed to read handshake response: " + err.Error())
+		fmt.Println("Failed to read handshake response: "+err.Error(), pieceIndex)
 		os.Exit(1)
 	}
 
@@ -365,18 +465,20 @@ outerLoop:
 				break outerLoop
 			}
 
+		case ChokeMessageID:
+			fmt.Println("Choked")
+			time.Sleep(3 * time.Second)
 		default:
 			fmt.Println("Unknown message ID: ", messageIdByte[0])
 		}
 	}
 
 	combinedPieceData := make([]byte, 0)
+
 	// combine all blocks
 	for _, blockData := range blocksData {
 		combinedPieceData = append(combinedPieceData, blockData...)
 	}
-
-	// fmt.Printf("Integrity Check Hash: %x\n", combinedPieceData)
 
 	// integrity check
 	sha1Hash := sha1.New()
@@ -387,21 +489,5 @@ outerLoop:
 		os.Exit(1)
 	}
 
-	outFile, err := os.OpenFile(outputPath, os.O_CREATE|os.O_WRONLY, 0644)
-
-	if err != nil {
-		fmt.Println("Failed to open output file: " + err.Error())
-		os.Exit(1)
-	}
-
-	defer outFile.Close()
-
-	_, err = outFile.Write(combinedPieceData)
-
-	if err != nil {
-		fmt.Println("Failed to write to output file: " + err.Error())
-		os.Exit(1)
-	}
-
-	fmt.Printf("Piece %d downloaded to %s\n", pieceIndex, outputPath)
+	return combinedPieceData
 }
