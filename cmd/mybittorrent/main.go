@@ -284,7 +284,14 @@ func main() {
 			os.Exit(1)
 		}
 
-		fullData := make([][]byte, len(metaInfo.PieceHashes))
+		outFile, err := os.OpenFile(outputPath, os.O_CREATE|os.O_WRONLY, 0644)
+
+		if err != nil {
+			fmt.Println("Failed to open output file: " + err.Error())
+			os.Exit(1)
+		}
+
+		defer outFile.Close()
 
 		wg := sync.WaitGroup{}
 
@@ -298,27 +305,11 @@ func main() {
 				defer selectedPeer.mu.Unlock()
 
 				res := downloadPiece(metaInfo, i, selectedPeer.value)
-				fullData[i] = res
+				writePiece(outFile, res, i, metaInfo.PieceLength)
 			}(i)
 		}
 
 		wg.Wait()
-
-		outFile, err := os.OpenFile(outputPath, os.O_CREATE|os.O_WRONLY, 0644)
-
-		if err != nil {
-			fmt.Println("Failed to open output file: " + err.Error())
-			os.Exit(1)
-		}
-
-		defer outFile.Close()
-
-		_, err = outFile.Write(bytes.Join(fullData, nil))
-
-		if err != nil {
-			fmt.Println("Failed to write to output file: " + err.Error())
-			os.Exit(1)
-		}
 
 		fmt.Printf("Downloaded %s to %s\n", torrentFile, outputPath)
 
@@ -327,6 +318,18 @@ func main() {
 		os.Exit(1)
 	}
 
+}
+
+func writePiece(outfile *os.File, data []byte, index int, pieceLength int) {
+
+	offset := index * pieceLength
+
+	_, err := outfile.WriteAt(data, int64(offset))
+
+	if err != nil {
+		fmt.Printf("Failed to write piece with idx: %i to output file: "+err.Error(), index)
+		os.Exit(1)
+	}
 }
 
 const (
