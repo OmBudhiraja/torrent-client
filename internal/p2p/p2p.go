@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/codecrafters-io/bittorrent-starter-go/internal/client"
+	"github.com/codecrafters-io/bittorrent-starter-go/internal/message"
 	"github.com/codecrafters-io/bittorrent-starter-go/internal/peer"
-	"github.com/codecrafters-io/bittorrent-starter-go/message"
 )
 
 const (

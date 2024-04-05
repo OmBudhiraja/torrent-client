@@ -5,8 +5,8 @@ import (
 	"net"
 
 	"github.com/codecrafters-io/bittorrent-starter-go/internal/bitfield"
+	"github.com/codecrafters-io/bittorrent-starter-go/internal/message"
 	"github.com/codecrafters-io/bittorrent-starter-go/internal/peer"
-	"github.com/codecrafters-io/bittorrent-starter-go/message"
 )
 
 type Client struct {
