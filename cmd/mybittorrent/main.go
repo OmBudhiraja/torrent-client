@@ -11,7 +11,7 @@ import (
 func main() {
 
 	if len(os.Args) < 3 {
-		fmt.Println("Usage: mybittorrent <torrent file> <output file>")
+		fmt.Println("Usage: mybittorrent <torrent filepath> <output path>")
 		os.Exit(1)
 	}
 
@@ -25,6 +25,9 @@ func main() {
 		os.Exit(1)
 	}
 
+	// fmt.Println(tf)
+	// return
+
 	now := time.Now()
 
 	err = tf.Download(outFile)
@@ -34,6 +37,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	fmt.Printf("Downloaded %s to %s in %.2fs\n", inFile, outFile, time.Since(now).Minutes())
+	fmt.Printf("Downloaded %s to %s in %s\n", inFile, outFile, time.Since(now).Round(time.Second).String())
 
 }

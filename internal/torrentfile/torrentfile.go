@@ -8,7 +8,7 @@ import (
 	"strings"
 
 	"github.com/codecrafters-io/bittorrent-starter-go/internal/p2p"
-	"github.com/codecrafters-io/bittorrent-starter-go/internal/peer"
+	"github.com/codecrafters-io/bittorrent-starter-go/internal/tracker"
 	"github.com/jackpal/bencode-go"
 )
 
@@ -74,12 +74,16 @@ func New(path string) (*TorrentFile, error) {
 
 func (t *TorrentFile) Download(outpath string) error {
 
-	peerId := "00112233445566778899"
+	peerId := []byte("00112233445566778899")
 
-	peers, err := peer.Request(t.Announce, peerId, t.InfoHash[:], t.Length)
+	peers, err := tracker.GetPeers(t.Announce, peerId, t.InfoHash[:], t.Length)
 
 	if err != nil {
 		return err
+	}
+
+	if len(peers) == 0 {
+		return fmt.Errorf("no peers found")
 	}
 
 	fmt.Println("Got peers: ", peers)
@@ -90,7 +94,7 @@ func (t *TorrentFile) Download(outpath string) error {
 		PieceHashes: t.PieceHashes,
 		PieceLength: t.PieceLength,
 		Length:      t.Length,
-		PeerId:      []byte(peerId),
+		PeerId:      peerId,
 	}
 
 	err = torrent.Download(outpath)
