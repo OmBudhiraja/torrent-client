@@ -2,16 +2,18 @@ package tracker
 
 import (
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 
+	"github.com/zeebo/bencode"
+
 	"github.com/codecrafters-io/bittorrent-starter-go/internal/peer"
-	"github.com/jackpal/bencode-go"
 )
 
 type bencodeTrackerResponse struct {
-	Interval int    `bencode:"interval"`
-	Peers    string `bencode:"peers"`
+	Interval int                `bencode:"interval"`
+	Peers    bencode.RawMessage `bencode:"peers"`
 }
 
 func getPeersFromHTTPTracker(baseUrl *url.URL, infoHash, peerId []byte, length int) ([]peer.Peer, error) {
@@ -35,13 +37,19 @@ func getPeersFromHTTPTracker(baseUrl *url.URL, infoHash, peerId []byte, length i
 
 	defer resp.Body.Close()
 
+	respBody, err := io.ReadAll(resp.Body)
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response body: %s", err.Error())
+	}
+
 	trackerResp := bencodeTrackerResponse{}
 
-	err = bencode.Unmarshal(resp.Body, &trackerResp)
+	err = bencode.DecodeBytes(respBody, &trackerResp)
 
 	if err != nil {
 		return nil, fmt.Errorf("failed to decode peers response: %s", err.Error())
 	}
 
-	return peer.Unmarshal([]byte(trackerResp.Peers))
+	return peer.Unmarshal(trackerResp.Peers)
 }

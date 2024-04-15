@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"io"
 	"net"
+
+	"github.com/zeebo/bencode"
 )
 
 type Peer struct {
@@ -49,9 +51,23 @@ const (
 )
 
 func Unmarshal(data []byte) ([]Peer, error) {
+	if data[0] == 'l' {
+		return unmarshalNonCompact(data)
+	} else {
+		var out []byte
+		err := bencode.DecodeString(string(data), &out)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decode peers response: %s", err.Error())
+		}
+		return unmarshalCompact(out)
+	}
+}
+
+func unmarshalCompact(data []byte) ([]Peer, error) {
 	numPeers := len(data) / peerSize
 
 	if len(data)%peerSize != 0 {
+		fmt.Println(len(data)%peerSize, len(data), data)
 		return nil, fmt.Errorf("invalid peer data")
 	}
 
@@ -64,4 +80,24 @@ func Unmarshal(data []byte) ([]Peer, error) {
 	}
 
 	return peers, nil
+}
+
+type uncompactPeer struct {
+	Ip   string `bencode:"ip"`
+	Port int    `bencode:"port"`
+}
+
+func unmarshalNonCompact(data []byte) ([]Peer, error) {
+
+	var peers []uncompactPeer
+
+	err := bencode.DecodeBytes(data, &peers)
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to unmarshal peers: %s", err.Error())
+	}
+
+	fmt.Println(peers)
+
+	return nil, nil
 }
