@@ -89,15 +89,19 @@ type uncompactPeer struct {
 
 func unmarshalNonCompact(data []byte) ([]Peer, error) {
 
-	var peers []uncompactPeer
+	var decodedPeers []uncompactPeer
 
-	err := bencode.DecodeBytes(data, &peers)
+	err := bencode.DecodeBytes(data, &decodedPeers)
 
 	if err != nil {
 		return nil, fmt.Errorf("failed to unmarshal peers: %s", err.Error())
 	}
 
-	fmt.Println(peers)
+	peers := make([]Peer, len(decodedPeers))
 
-	return nil, nil
+	for i, p := range decodedPeers {
+		peers[i] = Peer{Address: fmt.Sprintf("%s:%d", p.Ip, p.Port)}
+	}
+
+	return peers, nil
 }

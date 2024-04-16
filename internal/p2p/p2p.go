@@ -6,6 +6,8 @@ import (
 	"encoding/binary"
 	"fmt"
 	"os"
+	"path/filepath"
+	"sort"
 	"time"
 
 	"github.com/codecrafters-io/bittorrent-starter-go/internal/client"
@@ -27,6 +29,11 @@ type Torrent struct {
 	PeerId      []byte
 }
 
+type File struct {
+	Length int
+	Path   string
+}
+
 type pieceWork struct {
 	index  int
 	length int
@@ -34,21 +41,81 @@ type pieceWork struct {
 }
 
 type pieceResult struct {
-	index int
-	data  []byte
+	index  int
+	length int
+	data   []byte
 }
 
-func (t *Torrent) Download(outpath string) error {
+type outputFile struct {
+	path           string
+	length         int
+	startRange     int
+	endRange       int
+	remainingBytes int
+	file           *os.File
+}
+
+func (t *Torrent) Download(files []File, outpath string, isMultifile bool) error {
 	workQueue := make(chan *pieceWork, len(t.PieceHashes))
 	results := make(chan *pieceResult)
 
-	outfile, err := os.Create(outpath)
-
-	if err != nil {
-		return err
+	if isMultifile && len(files) == 0 {
+		return fmt.Errorf("no files to download")
 	}
 
-	defer outfile.Close()
+	outFilesMap := make(map[int]*outputFile)
+
+	if isMultifile {
+		for index, file := range files {
+			path := filepath.Join(outpath, file.Path)
+			err := os.MkdirAll(filepath.Dir(path), 0755)
+
+			if err != nil {
+				return err
+			}
+
+			outfile, err := os.Create(path)
+
+			if err != nil {
+				return err
+			}
+
+			startRange := 0
+
+			if index > 0 {
+				startRange = outFilesMap[index-1].endRange
+			}
+
+			outFilesMap[index] = &outputFile{
+				path:           path,
+				length:         file.Length,
+				file:           outfile,
+				startRange:     startRange,
+				remainingBytes: file.Length,
+				endRange:       startRange + file.Length,
+			}
+
+			fmt.Println("outfile", outFilesMap[index])
+
+			defer outfile.Close()
+
+		}
+
+		// return nil
+
+	} else {
+		outfile, err := os.Create(outpath)
+
+		if err != nil {
+			return err
+		}
+
+		outFilesMap[0] = &outputFile{
+			file: outfile,
+		}
+
+		defer outfile.Close()
+	}
 
 	for _, peer := range t.Peers {
 		go t.startWorker(peer, workQueue, results)
@@ -76,11 +143,21 @@ func (t *Torrent) Download(outpath string) error {
 
 		piecesDownloaded++
 
-		offset := piece.index * t.PieceLength
-		_, err := outfile.WriteAt(piece.data, int64(offset))
+		if !isMultifile {
+			offset := piece.index * t.PieceLength
+			_, err := outFilesMap[0].file.WriteAt(piece.data, int64(offset))
 
-		if err != nil {
-			return err
+			if err != nil {
+				return err
+			}
+
+		} else {
+
+			err := piece.writeToFiles(outFilesMap, t.PieceLength)
+
+			if err != nil {
+				return err
+			}
 		}
 
 		percent := float64(piecesDownloaded) / float64(len(t.PieceHashes)) * 100
@@ -88,6 +165,73 @@ func (t *Torrent) Download(outpath string) error {
 	}
 
 	close(workQueue)
+
+	return nil
+}
+
+func (p *pieceResult) writeToFiles(files map[int]*outputFile, pieceLength int) error {
+
+	pieceOffsetStart := p.index * pieceLength
+	pieceOffsetEnd := pieceOffsetStart + p.length
+
+	bytesWritten := 0
+
+	keysToDelete := make([]int, 0)
+
+	var sortedKeys []int
+
+	for key := range files {
+		sortedKeys = append(sortedKeys, key)
+	}
+
+	sort.Slice(sortedKeys, func(i, j int) bool {
+		return i < j
+	})
+
+	for _, key := range sortedKeys {
+		file := files[key]
+		if pieceOffsetEnd > file.startRange && pieceOffsetStart < file.endRange {
+			fileStart := max(pieceOffsetStart, file.startRange)
+			fileEnd := min(pieceOffsetEnd, file.endRange)
+			writeoffset := fileStart - file.startRange
+
+			// Write the piece data to the file
+			n, err := file.file.WriteAt(p.data[bytesWritten:bytesWritten+(fileEnd-fileStart)], int64(writeoffset))
+			if err != nil {
+				return err
+			}
+
+			bytesWritten += n
+			file.remainingBytes -= n
+
+			fmt.Println("File:", file)
+			fmt.Println("Piece:", p.length, p.index)
+			fmt.Println("PieceOffsetStart:", pieceOffsetStart)
+			fmt.Println("PieceOffsetEnd:", pieceOffsetEnd)
+			fmt.Println("FileStart:", fileStart)
+			fmt.Println("FileEnd:", fileEnd)
+			fmt.Println("Offset:", writeoffset)
+			fmt.Println("BytesWritten:", bytesWritten)
+			fmt.Println("-----------------------------------------------------------------")
+
+			// flag file for delete from map if all bytes are written
+			if file.remainingBytes == 0 {
+				keysToDelete = append(keysToDelete, key)
+			}
+
+			if bytesWritten == p.length {
+				break
+			}
+		}
+	}
+
+	// for index, file := range files {
+	// }
+
+	for _, key := range keysToDelete {
+		fmt.Println("deleting from map", key)
+		delete(files, key)
+	}
 
 	return nil
 }
@@ -132,8 +276,9 @@ func (t *Torrent) startWorker(peer peer.Peer, workQueue chan *pieceWork, results
 
 		client.SendHaveMsg(work.index)
 		resultsChan <- &pieceResult{
-			index: work.index,
-			data:  buffer,
+			index:  work.index,
+			length: work.length,
+			data:   buffer,
 		}
 	}
 }
@@ -204,4 +349,19 @@ func downloadPiece(c *client.Client, work *pieceWork) ([]byte, error) {
 	}
 
 	return bytes.Join(blocksData, nil), nil
+}
+
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+// Helper function to get the minimum of two integers
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }

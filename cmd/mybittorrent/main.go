@@ -25,7 +25,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	// fmt.Println(tf)
+	fmt.Println(tf)
 	// return
 
 	now := time.Now()

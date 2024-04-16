@@ -1,15 +1,19 @@
 package torrentfile
 
 import (
-	"bytes"
 	"crypto/sha1"
 	"fmt"
 	"os"
+	"path"
+	"path/filepath"
 	"strings"
+	"unicode"
+
+	"io"
 
 	"github.com/codecrafters-io/bittorrent-starter-go/internal/p2p"
 	"github.com/codecrafters-io/bittorrent-starter-go/internal/tracker"
-	"github.com/jackpal/bencode-go"
+	"github.com/zeebo/bencode"
 )
 
 type TorrentFile struct {
@@ -19,6 +23,8 @@ type TorrentFile struct {
 	PieceLength int
 	Length      int
 	Name        string
+	Files       []p2p.File
+	IsMultiFile bool
 }
 
 type bencodeInfo struct {
@@ -26,18 +32,18 @@ type bencodeInfo struct {
 	Pieces      string `bencode:"pieces"`
 	PieceLength int    `bencode:"piece length"`
 	Length      int    `bencode:"length"`
-	Files       []File `bencode:"files"`
+	Files       []file `bencode:"files"`
 }
 
-type File struct {
+type file struct {
 	Length int      `bencode:"length"`
 	Path   []string `bencode:"path"`
 }
 
 type bencodeTorrent struct {
-	Announce string      `bencode:"announce"`
-	Info     bencodeInfo `bencode:"info"`
-	file     *os.File
+	Announce string             `bencode:"announce"`
+	Info     bencode.RawMessage `bencode:"info"`
+	info     bencodeInfo
 }
 
 func New(path string) (*TorrentFile, error) {
@@ -49,33 +55,57 @@ func New(path string) (*TorrentFile, error) {
 
 	defer file.Close()
 
-	bencodeTo := bencodeTorrent{
-		file: file,
-	}
+	bencodeTo := bencodeTorrent{}
 
-	err = bencode.Unmarshal(file, &bencodeTo)
+	filedata, err := io.ReadAll(file)
 
 	if err != nil {
 		return nil, err
 	}
 
-	infoHash, err := bencodeTo.hash()
+	err = bencode.DecodeBytes(filedata, &bencodeTo)
 
 	if err != nil {
 		return nil, err
 	}
 
-	pieceHashes, err := bencodeTo.Info.pieceHashes()
+	infoHash := sha1.Sum(bencodeTo.Info)
+
+	infoDict := bencodeInfo{}
+
+	err = bencode.DecodeBytes(bencodeTo.Info, &infoDict)
 
 	if err != nil {
 		return nil, err
 	}
 
-	isMultiFile := len(bencodeTo.Info.Files) > 0
+	bencodeTo.info = infoDict
+
+	pieceHashes, err := bencodeTo.info.pieceHashes()
+
+	if err != nil {
+		return nil, err
+	}
+
+	isMultiFile := len(bencodeTo.info.Files) > 0
+
+	var files []p2p.File
 
 	if isMultiFile {
-		for _, file := range bencodeTo.Info.Files {
-			bencodeTo.Info.Length += file.Length
+
+		for _, file := range bencodeTo.info.Files {
+			bencodeTo.info.Length += file.Length
+			fileParts := make([]string, len(file.Path))
+
+			for i, p := range file.Path {
+				fileParts[i] = cleanName(p)
+			}
+
+			files = append(files, p2p.File{
+				Length: file.Length,
+				Path:   filepath.Join(fileParts...),
+			})
+
 		}
 	}
 
@@ -83,9 +113,11 @@ func New(path string) (*TorrentFile, error) {
 		Announce:    bencodeTo.Announce,
 		InfoHash:    infoHash,
 		PieceHashes: pieceHashes,
-		PieceLength: bencodeTo.Info.PieceLength,
-		Length:      bencodeTo.Info.Length,
-		Name:        bencodeTo.Info.Name,
+		PieceLength: bencodeTo.info.PieceLength,
+		Length:      bencodeTo.info.Length,
+		Name:        bencodeTo.info.Name,
+		Files:       files,
+		IsMultiFile: isMultiFile,
 	}, nil
 }
 
@@ -114,7 +146,7 @@ func (t *TorrentFile) Download(outpath string) error {
 		PeerId:      peerId,
 	}
 
-	err = torrent.Download(outpath)
+	err = torrent.Download(t.Files, outpath, t.IsMultiFile)
 
 	if err != nil {
 		return err
@@ -133,40 +165,17 @@ func (t *TorrentFile) String() string {
 	sb.WriteString(fmt.Sprintf("Info Hash: %x\n", t.InfoHash))
 	sb.WriteString(fmt.Sprintf("Piece Length: %d\n", t.PieceLength))
 	sb.WriteString(fmt.Sprintf("No. of Piece: %d\n", len(t.PieceHashes)))
+	sb.WriteString(fmt.Sprintf("Is Multi File: %t\n", t.IsMultiFile))
+
+	if t.IsMultiFile {
+		sb.WriteString("Files: \n")
+		for _, file := range t.Files {
+			sb.WriteString(fmt.Sprintf("  - %s (%d bytes)\n", file.Path, file.Length))
+		}
+
+	}
 
 	return sb.String()
-}
-
-func (bt *bencodeTorrent) hash() ([20]byte, error) {
-
-	bt.file.Seek(0, 0)
-
-	decodedTorrent, err := bencode.Decode(bt.file)
-
-	if err != nil {
-		return [20]byte{}, err
-	}
-
-	torrentDict, ok := decodedTorrent.(map[string]interface{})
-
-	if !ok {
-		return [20]byte{}, fmt.Errorf("invalid bencode format")
-	}
-
-	infoDict, ok := torrentDict["info"]
-
-	if !ok {
-		return [20]byte{}, fmt.Errorf("info key not found")
-	}
-
-	var buffer bytes.Buffer
-	err = bencode.Marshal(&buffer, infoDict)
-
-	if err != nil {
-		return [20]byte{}, err
-	}
-
-	return sha1.Sum(buffer.Bytes()), nil
 }
 
 func (info *bencodeInfo) pieceHashes() ([][20]byte, error) {
@@ -185,4 +194,33 @@ func (info *bencodeInfo) pieceHashes() ([][20]byte, error) {
 	}
 
 	return hashes, nil
+}
+
+// utils
+
+func cleanName(s string) string {
+	s = strings.ToValidUTF8(s, string(unicode.ReplacementChar))
+	s = trimName(s, 255)
+	s = strings.ToValidUTF8(s, "")
+	return replaceSeparator(s)
+}
+
+func trimName(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	ext := path.Ext(s)
+	if len(ext) > max {
+		return s[:max]
+	}
+	return s[:max-len(ext)] + ext
+}
+
+func replaceSeparator(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r == '/' {
+			return '_'
+		}
+		return r
+	}, s)
 }
