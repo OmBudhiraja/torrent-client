@@ -95,13 +95,9 @@ func (t *Torrent) Download(files []File, outpath string, isMultifile bool) error
 				endRange:       startRange + file.Length,
 			}
 
-			fmt.Println("outfile", outFilesMap[index])
-
 			defer outfile.Close()
 
 		}
-
-		// return nil
 
 	} else {
 		outfile, err := os.Create(outpath)
@@ -204,16 +200,6 @@ func (p *pieceResult) writeToFiles(files map[int]*outputFile, pieceLength int) e
 			bytesWritten += n
 			file.remainingBytes -= n
 
-			fmt.Println("File:", file)
-			fmt.Println("Piece:", p.length, p.index)
-			fmt.Println("PieceOffsetStart:", pieceOffsetStart)
-			fmt.Println("PieceOffsetEnd:", pieceOffsetEnd)
-			fmt.Println("FileStart:", fileStart)
-			fmt.Println("FileEnd:", fileEnd)
-			fmt.Println("Offset:", writeoffset)
-			fmt.Println("BytesWritten:", bytesWritten)
-			fmt.Println("-----------------------------------------------------------------")
-
 			// flag file for delete from map if all bytes are written
 			if file.remainingBytes == 0 {
 				keysToDelete = append(keysToDelete, key)
@@ -225,11 +211,7 @@ func (p *pieceResult) writeToFiles(files map[int]*outputFile, pieceLength int) e
 		}
 	}
 
-	// for index, file := range files {
-	// }
-
 	for _, key := range keysToDelete {
-		fmt.Println("deleting from map", key)
 		delete(files, key)
 	}
 
@@ -269,7 +251,6 @@ func (t *Torrent) startWorker(peer peer.Peer, workQueue chan *pieceWork, results
 
 		if !bytes.Equal(hash[:], work.hash[:]) {
 			fmt.Printf("Piece %d from %s has incorrect hash\n", work.index, peer.Address)
-			fmt.Printf("Expected: %xand got %x\n", work.hash, hash)
 			workQueue <- work
 			continue
 		}

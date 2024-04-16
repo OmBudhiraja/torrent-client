@@ -135,8 +135,6 @@ func (t *TorrentFile) Download(outpath string) error {
 		return fmt.Errorf("no peers found")
 	}
 
-	fmt.Println("Got peers: ", peers)
-
 	torrent := p2p.Torrent{
 		Peers:       peers,
 		InfoHash:    t.InfoHash,
