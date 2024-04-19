@@ -125,7 +125,9 @@ func (t *TorrentFile) Download(outpath string) error {
 
 	peerId := []byte("00112233445566778899")
 
+	fmt.Printf("Waiting for peers...")
 	peers, err := tracker.GetPeers(t.Announce, peerId, t.InfoHash[:], t.Length)
+	fmt.Printf("\rFound %d peers           \n", len(peers))
 
 	if err != nil {
 		return err
@@ -142,9 +144,10 @@ func (t *TorrentFile) Download(outpath string) error {
 		PieceLength: t.PieceLength,
 		Length:      t.Length,
 		PeerId:      peerId,
+		Files:       t.Files,
 	}
 
-	err = torrent.Download(t.Files, outpath, t.IsMultiFile)
+	err = torrent.Download(outpath)
 
 	if err != nil {
 		return err

@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"crypto/sha1"
 	"encoding/binary"
-	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -13,6 +12,7 @@ import (
 	"github.com/codecrafters-io/bittorrent-starter-go/internal/client"
 	"github.com/codecrafters-io/bittorrent-starter-go/internal/message"
 	"github.com/codecrafters-io/bittorrent-starter-go/internal/peer"
+	"github.com/codecrafters-io/bittorrent-starter-go/pkg/progressbar"
 )
 
 const (
@@ -27,6 +27,7 @@ type Torrent struct {
 	PieceLength int
 	Length      int
 	PeerId      []byte
+	Files       []File
 }
 
 type File struct {
@@ -55,18 +56,20 @@ type outputFile struct {
 	file           *os.File
 }
 
-func (t *Torrent) Download(files []File, outpath string, isMultifile bool) error {
+func (t *Torrent) Download(outpath string) error {
 	workQueue := make(chan *pieceWork, len(t.PieceHashes))
 	results := make(chan *pieceResult)
 
-	if isMultifile && len(files) == 0 {
-		return fmt.Errorf("no files to download")
-	}
+	isMultifile := len(t.Files) > 0
 
 	outFilesMap := make(map[int]*outputFile)
 
+	progressbar := progressbar.New(len(t.PieceHashes))
+
+	progressbar.Start()
+
 	if isMultifile {
-		for index, file := range files {
+		for index, file := range t.Files {
 			path := filepath.Join(outpath, file.Path)
 			err := os.MkdirAll(filepath.Dir(path), 0755)
 
@@ -156,9 +159,10 @@ func (t *Torrent) Download(files []File, outpath string, isMultifile bool) error
 			}
 		}
 
-		percent := float64(piecesDownloaded) / float64(len(t.PieceHashes)) * 100
-		fmt.Printf("(%0.2f%%) Downloaded piece #%d from peers\n", percent, piece.index)
+		progressbar.Update(piecesDownloaded)
 	}
+
+	progressbar.Finish()
 
 	close(workQueue)
 
@@ -222,11 +226,9 @@ func (t *Torrent) startWorker(peer peer.Peer, workQueue chan *pieceWork, results
 	client, err := client.New(peer, t.PeerId, t.InfoHash)
 
 	if err != nil {
-		fmt.Printf("Failed to handshake with peer: %s \n", peer.Address)
 		return
 	}
 	defer client.Conn.Close()
-	fmt.Println("Handshake successful with peer: ", peer.Address)
 
 	client.SendUnchokeMsg()
 	client.SendInterestedMsg()
@@ -241,7 +243,7 @@ func (t *Torrent) startWorker(peer peer.Peer, workQueue chan *pieceWork, results
 		buffer, err := downloadPiece(client, work)
 
 		if err != nil {
-			fmt.Printf("Failed to download piece %d from peer %s: %s\n", work.index, peer.Address, err.Error())
+			// fmt.Printf("Failed to download piece %d from peer %s: %s\n", work.index, peer.Address, err.Error())
 			workQueue <- work
 			return
 		}
@@ -250,7 +252,7 @@ func (t *Torrent) startWorker(peer peer.Peer, workQueue chan *pieceWork, results
 		hash := sha1.Sum(buffer)
 
 		if !bytes.Equal(hash[:], work.hash[:]) {
-			fmt.Printf("Piece %d from %s has incorrect hash\n", work.index, peer.Address)
+			// fmt.Printf("Piece %d from %s has incorrect hash\n", work.index, peer.Address)
 			workQueue <- work
 			continue
 		}
