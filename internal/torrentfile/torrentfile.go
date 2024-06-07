@@ -138,6 +138,7 @@ func (t *TorrentFile) Download(outpath string) error {
 	}
 
 	torrent := p2p.Torrent{
+		Name:        t.Name,
 		Peers:       peers,
 		InfoHash:    t.InfoHash,
 		PieceHashes: t.PieceHashes,

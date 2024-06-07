@@ -15,5 +15,5 @@ A simple BitTorrent Client written in Go.
 ```bash
 go build -o torrent_client ./cmd/mybittorrent/main.go
 
-./torrent_client sample.torrent ./sample.txt
+./torrent_client ./sample_torrents/sample.torrent ./sample.txt
 ```

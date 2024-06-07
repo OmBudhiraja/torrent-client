@@ -21,6 +21,7 @@ const (
 )
 
 type Torrent struct {
+	Name        string
 	Peers       []peer.Peer
 	InfoHash    [20]byte
 	PieceHashes [][20]byte
@@ -103,6 +104,12 @@ func (t *Torrent) Download(outpath string) error {
 		}
 
 	} else {
+
+		// check if outpath is a directory
+		if filepath.Ext(outpath) == "" || filepath.Ext(outpath) == "." {
+			outpath = filepath.Join(outpath, t.Name)
+		}
+
 		outfile, err := os.Create(outpath)
 
 		if err != nil {
