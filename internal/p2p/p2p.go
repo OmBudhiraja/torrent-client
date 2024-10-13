@@ -69,9 +69,11 @@ func (t *Torrent) Download(outpath string) error {
 
 	progressbar.Start()
 
+	defer progressbar.Finish()
+
 	if isMultifile {
 		for index, file := range t.Files {
-			path := filepath.Join(outpath, file.Path)
+			path := filepath.Join(outpath, t.Name, file.Path)
 			err := os.MkdirAll(filepath.Dir(path), 0755)
 
 			if err != nil {
@@ -104,13 +106,17 @@ func (t *Torrent) Download(outpath string) error {
 		}
 
 	} else {
+		// check if outpath directory exists
+		if _, err := os.Stat(outpath); os.IsNotExist(err) {
+			err := os.MkdirAll(outpath, 0755)
 
-		// check if outpath is a directory
-		if filepath.Ext(outpath) == "" || filepath.Ext(outpath) == "." {
-			outpath = filepath.Join(outpath, t.Name)
+			if err != nil {
+				return err
+			}
 		}
 
-		outfile, err := os.Create(outpath)
+		filePath := filepath.Join(outpath, t.Name)
+		outfile, err := os.Create(filePath)
 
 		if err != nil {
 			return err
@@ -168,8 +174,6 @@ func (t *Torrent) Download(outpath string) error {
 
 		progressbar.Update(piecesDownloaded)
 	}
-
-	progressbar.Finish()
 
 	close(workQueue)
 
