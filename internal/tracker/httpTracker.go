@@ -12,8 +12,9 @@ import (
 )
 
 type bencodeTrackerResponse struct {
-	Interval int                `bencode:"interval"`
-	Peers    bencode.RawMessage `bencode:"peers"`
+	Interval      int                `bencode:"interval"`
+	Peers         bencode.RawMessage `bencode:"peers"`
+	FailureReason string             `bencode:"failure reason"`
 }
 
 func getPeersFromHTTPTracker(baseUrl *url.URL, infoHash, peerId []byte, length int) ([]peer.Peer, error) {
@@ -49,6 +50,10 @@ func getPeersFromHTTPTracker(baseUrl *url.URL, infoHash, peerId []byte, length i
 
 	if err != nil {
 		return nil, fmt.Errorf("failed to decode peers response: %s", err.Error())
+	}
+
+	if trackerResp.FailureReason != "" {
+		return nil, fmt.Errorf("tracker failed: %s", trackerResp.FailureReason)
 	}
 
 	return peer.Unmarshal(trackerResp.Peers)

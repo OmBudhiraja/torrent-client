@@ -7,15 +7,16 @@ import (
 )
 
 const (
-	ChokeMessageID byte = iota
-	UnchokeMessageID
-	InterestedMessageID
-	NotInterestedMessageID
-	HaveMessageID
-	BitfieldMessageID
-	RequestMessageID
-	PieceMessageID
-	CancelMessageID
+	ChokeMessageID         byte = 0
+	UnchokeMessageID       byte = 1
+	InterestedMessageID    byte = 2
+	NotInterestedMessageID byte = 3
+	HaveMessageID          byte = 4
+	BitfieldMessageID      byte = 5
+	RequestMessageID       byte = 6
+	PieceMessageID         byte = 7
+	CancelMessageID        byte = 8
+	ExtensionMessageId     byte = 20
 )
 
 type Message struct {

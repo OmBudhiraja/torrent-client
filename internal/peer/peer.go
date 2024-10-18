@@ -5,52 +5,93 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"time"
 
 	"github.com/zeebo/bencode"
+)
+
+const (
+	PROTOCOL_NAME_HEADER = "BitTorrent protocol"
 )
 
 type Peer struct {
 	Address string
 }
 
-func (p Peer) CompleteHandshake(infoHash []byte, peerId []byte) (net.Conn, error) {
-	conn, err := net.Dial("tcp", p.Address)
+type HandshakeResponse struct {
+	Conn                      net.Conn
+	SupportsExtensionProtocol bool
+}
+
+func (p Peer) CompleteHandshake(infoHash []byte, peerId []byte) (*HandshakeResponse, error) {
+	conn, err := net.DialTimeout("tcp", p.Address, 5*time.Second)
 
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to peer: %s", err.Error())
 	}
 
-	handShakeMsg := make([]byte, 0)
+	// asert that info hash and peer id are of the correct length
+	if len(infoHash) != 20 {
+		return nil, fmt.Errorf("invalid info hash length")
+	}
 
-	handShakeMsg = append(handShakeMsg, 19) // Length of the protocol string
-	handShakeMsg = append(handShakeMsg, []byte("BitTorrent protocol")...)
-	handShakeMsg = append(handShakeMsg, make([]byte, 8)...) // 8 reserved bytes
+	if len(peerId) != 20 {
+		return nil, fmt.Errorf("invalid peer id length")
+	}
 
-	handShakeMsg = append(handShakeMsg, infoHash...) // Info hash
-	handShakeMsg = append(handShakeMsg, peerId...)   // Peer ID
+	handshakeMsgSent := make([]byte, 0)
 
-	_, err = conn.Write(handShakeMsg)
+	handshakeMsgSent = append(handshakeMsgSent, 19) // Length of the protocol string
+	handshakeMsgSent = append(handshakeMsgSent, []byte(PROTOCOL_NAME_HEADER)...)
+
+	reservedByes := make([]byte, 8)
+
+	// set the 20th bit to 1 to indicate that we support the extension protocol
+	reservedByes[5] = 0x10
+
+	handshakeMsgSent = append(handshakeMsgSent, reservedByes...) // 8 reserved bytes
+
+	handshakeMsgSent = append(handshakeMsgSent, infoHash...) // Info hash
+	handshakeMsgSent = append(handshakeMsgSent, peerId...)   // Peer ID
+
+	_, err = conn.Write(handshakeMsgSent)
 
 	if err != nil {
 		return nil, fmt.Errorf("failed to send handshake message: %s", err.Error())
 	}
 
-	handshakeMsg := make([]byte, 68)
+	handshakeMsgRecieved := make([]byte, 68)
 
-	_, err = io.ReadFull(conn, handshakeMsg)
+	n, err := io.ReadFull(conn, handshakeMsgRecieved)
 
 	if err != nil {
 		return nil, fmt.Errorf("failed to read handshake message: %s", err.Error())
 	}
 
-	return conn, nil
+	if n < 68 {
+		return nil, fmt.Errorf("invalid handshake message")
+	}
+
+	// verify handshake message
+	if handshakeMsgRecieved[0] != 19 || string(handshakeMsgRecieved[1:20]) != PROTOCOL_NAME_HEADER {
+		return nil, fmt.Errorf("invalid handshake message")
+	}
+
+	// check if the peer supports the extension protocol
+	supportsExtensionProtocol := handshakeMsgRecieved[25]&0x10 == 0x10
+
+	return &HandshakeResponse{
+		Conn:                      conn,
+		SupportsExtensionProtocol: supportsExtensionProtocol,
+	}, nil
 }
 
-const (
-	peerSize = 6
-)
-
 func Unmarshal(data []byte) ([]Peer, error) {
+
+	if len(data) == 0 {
+		return []Peer{}, nil
+	}
+
 	if data[0] == 'l' {
 		return unmarshalNonCompact(data)
 	} else {
@@ -64,6 +105,7 @@ func Unmarshal(data []byte) ([]Peer, error) {
 }
 
 func unmarshalCompact(data []byte) ([]Peer, error) {
+	peerSize := 6
 	numPeers := len(data) / peerSize
 
 	if len(data)%peerSize != 0 {

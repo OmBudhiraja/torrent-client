@@ -1,7 +1,6 @@
 package client
 
 import (
-	"fmt"
 	"net"
 
 	"github.com/codecrafters-io/bittorrent-starter-go/internal/bitfield"
@@ -18,35 +17,24 @@ type Client struct {
 	PeerId   []byte
 }
 
-func New(peer peer.Peer, peerId []byte, infoHash [20]byte) (*Client, error) {
-	conn, err := peer.CompleteHandshake(infoHash[:], peerId)
+func New(peer peer.Peer, peerId []byte, infoHash [20]byte, totalPieces int) (*Client, error) {
+	handshakeRes, err := peer.CompleteHandshake(infoHash[:], peerId)
 
 	if err != nil {
 		return nil, err
 	}
 
-	msg, err := message.Read(conn)
-
-	if err != nil {
-		return nil, err
-	}
-
-	if msg == nil {
-		return nil, fmt.Errorf("expected bitfield message, got keep alive message??")
-	}
-
-	if msg.ID != message.BitfieldMessageID {
-		return nil, fmt.Errorf("expected bitfield message, got %d", msg.ID)
-	}
-
-	return &Client{
-		Conn:     conn,
+	client := &Client{
+		Conn:     handshakeRes.Conn,
 		Choked:   true,
-		BitField: msg.Payload,
 		Peer:     peer,
-		InfoHash: infoHash,
 		PeerId:   peerId,
-	}, nil
+		InfoHash: infoHash,
+		BitField: bitfield.New(totalPieces),
+	}
+
+	return client, nil
+
 }
 
 func (c *Client) SendInterestedMsg() error {

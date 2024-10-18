@@ -3,6 +3,17 @@ package bitfield
 // A Bitfield represents the pieces that a peer has
 type Bitfield []byte
 
+func New(totalPices int) Bitfield {
+
+	// calculate the number of bytes needed to represent the bitfield
+	byteLen := totalPices / 8
+	if totalPices%8 != 0 {
+		byteLen++
+	}
+
+	return make([]byte, byteLen)
+}
+
 // HasPiece tells if a bitfield has a particular index set
 func (bf Bitfield) HasPiece(index int) bool {
 	byteIndex := index / 8

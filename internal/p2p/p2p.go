@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/sha1"
 	"encoding/binary"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -48,6 +49,11 @@ type pieceResult struct {
 	data   []byte
 }
 
+type messageResult struct {
+	id   byte
+	data []byte
+}
+
 type outputFile struct {
 	path           string
 	length         int
@@ -68,7 +74,6 @@ func (t *Torrent) Download(outpath string) error {
 	progressbar := progressbar.New(len(t.PieceHashes))
 
 	progressbar.Start()
-
 	defer progressbar.Finish()
 
 	if isMultifile {
@@ -234,15 +239,24 @@ func (p *pieceResult) writeToFiles(files map[int]*outputFile, pieceLength int) e
 }
 
 func (t *Torrent) startWorker(peer peer.Peer, workQueue chan *pieceWork, resultsChan chan *pieceResult) {
-	client, err := client.New(peer, t.PeerId, t.InfoHash)
+	client, err := client.New(peer, t.PeerId, t.InfoHash, len(t.PieceHashes))
 
 	if err != nil {
+		// fmt.Printf("Failed to create client for peer %s: %s\n", peer.Address, err.Error())
 		return
 	}
 	defer client.Conn.Close()
 
 	client.SendUnchokeMsg()
 	client.SendInterestedMsg()
+
+	closeChan := make(chan struct{})
+	defer close(closeChan)
+
+	//NOTE: buffered channel length should be decided
+	messageChan := make(chan *messageResult, 30)
+
+	go parseMessageFromConn(client, messageChan, closeChan)
 
 	for work := range workQueue {
 
@@ -251,11 +265,12 @@ func (t *Torrent) startWorker(peer peer.Peer, workQueue chan *pieceWork, results
 			continue
 		}
 
-		buffer, err := downloadPiece(client, work)
+		buffer, err := downloadPiece(client, work, messageChan)
 
 		if err != nil {
 			// fmt.Printf("Failed to download piece %d from peer %s: %s\n", work.index, peer.Address, err.Error())
 			workQueue <- work
+			closeChan <- struct{}{}
 			return
 		}
 
@@ -269,6 +284,7 @@ func (t *Torrent) startWorker(peer peer.Peer, workQueue chan *pieceWork, results
 		}
 
 		client.SendHaveMsg(work.index)
+
 		resultsChan <- &pieceResult{
 			index:  work.index,
 			length: work.length,
@@ -277,7 +293,7 @@ func (t *Torrent) startWorker(peer peer.Peer, workQueue chan *pieceWork, results
 	}
 }
 
-func downloadPiece(c *client.Client, work *pieceWork) ([]byte, error) {
+func downloadPiece(c *client.Client, work *pieceWork, messageChan chan *messageResult) ([]byte, error) {
 
 	var numBlocks, numBlockRecieved, backlog, requested int
 
@@ -288,9 +304,6 @@ func downloadPiece(c *client.Client, work *pieceWork) ([]byte, error) {
 	}
 
 	blocksData := make([][]byte, numBlocks)
-
-	c.Conn.SetDeadline(time.Now().Add(30 * time.Second))
-	defer c.Conn.SetDeadline(time.Time{}) // Disable the deadline
 
 	for numBlockRecieved < numBlocks {
 
@@ -313,36 +326,73 @@ func downloadPiece(c *client.Client, work *pieceWork) ([]byte, error) {
 			}
 		}
 
-		msg, err := message.Read(c.Conn)
+		msg := <-messageChan
 
-		if err != nil {
-			return nil, err
-		}
-
-		// Keep alive message recieved
 		if msg == nil {
-			continue
+			return nil, fmt.Errorf("failed to read message")
 		}
 
-		switch msg.ID {
-		case message.UnchokeMessageID:
-			c.Choked = false
-		case message.ChokeMessageID:
-			c.Choked = true
-		case message.PieceMessageID:
-			blockIndex := int(binary.BigEndian.Uint32(msg.Payload[4:8])) / maxBlockSize
-			blocksData[blockIndex] = msg.Payload[8:]
+		if msg.id == message.PieceMessageID {
+			blockIndex := int(binary.BigEndian.Uint32(msg.data[4:8])) / maxBlockSize
+			blocksData[blockIndex] = msg.data[8:]
 
 			numBlockRecieved++
 			backlog--
-		case message.HaveMessageID:
-			index := int(binary.BigEndian.Uint32(msg.Payload))
-			c.BitField.SetPiece(index)
 		}
 
 	}
 
 	return bytes.Join(blocksData, nil), nil
+}
+
+func parseMessageFromConn(client *client.Client, messageResultChan chan *messageResult, closeChan chan struct{}) {
+
+	// Setting a deadline helps get unresponsive peers unstuck.
+	// 20 seconds is more than enough time to download a block
+	client.Conn.SetReadDeadline(time.Now().Add(20 * time.Second))
+
+	for {
+		select {
+		case <-closeChan:
+			return
+		default:
+			msg, err := message.Read(client.Conn)
+
+			if err != nil {
+				messageResultChan <- nil
+				return
+			}
+
+			if msg == nil {
+				// Keep alive message recieved
+				continue
+			}
+
+			result := messageResult{
+				id: msg.ID,
+			}
+
+			switch msg.ID {
+			case message.UnchokeMessageID:
+				client.Choked = false
+			case message.ChokeMessageID:
+				client.Choked = true
+			case message.HaveMessageID:
+				index := int(binary.BigEndian.Uint32(msg.Payload))
+				client.BitField.SetPiece(index)
+			case message.BitfieldMessageID:
+				client.BitField = msg.Payload
+			case message.ExtensionMessageId:
+				// TODO: Handle extension messages
+			case message.PieceMessageID:
+				result.data = msg.Payload
+				// extend the read deadline
+				client.Conn.SetReadDeadline(time.Now().Add(20 * time.Second))
+			}
+
+			messageResultChan <- &result
+		}
+	}
 }
 
 func max(a, b int) int {
