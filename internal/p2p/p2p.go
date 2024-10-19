@@ -1,17 +1,9 @@
 package p2p
 
 import (
-	"bytes"
-	"crypto/sha1"
-	"encoding/binary"
-	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
-	"time"
 
-	"github.com/codecrafters-io/bittorrent-starter-go/internal/client"
-	"github.com/codecrafters-io/bittorrent-starter-go/internal/message"
 	"github.com/codecrafters-io/bittorrent-starter-go/internal/peer"
 	"github.com/codecrafters-io/bittorrent-starter-go/pkg/progressbar"
 )
@@ -37,23 +29,6 @@ type File struct {
 	Path   string
 }
 
-type pieceWork struct {
-	index  int
-	length int
-	hash   [20]byte
-}
-
-type pieceResult struct {
-	index  int
-	length int
-	data   []byte
-}
-
-type messageResult struct {
-	id   byte
-	data []byte
-}
-
 type outputFile struct {
 	path           string
 	length         int
@@ -69,7 +44,7 @@ func (t *Torrent) Download(outpath string) error {
 
 	isMultifile := len(t.Files) > 0
 
-	outFilesMap := make(map[int]*outputFile)
+	var outfiles []*outputFile
 
 	progressbar := progressbar.New(len(t.PieceHashes))
 
@@ -77,6 +52,7 @@ func (t *Torrent) Download(outpath string) error {
 	defer progressbar.Finish()
 
 	if isMultifile {
+		outfiles = make([]*outputFile, len(t.Files))
 		for index, file := range t.Files {
 			path := filepath.Join(outpath, t.Name, file.Path)
 			err := os.MkdirAll(filepath.Dir(path), 0755)
@@ -94,10 +70,10 @@ func (t *Torrent) Download(outpath string) error {
 			startRange := 0
 
 			if index > 0 {
-				startRange = outFilesMap[index-1].endRange
+				startRange = outfiles[index-1].endRange
 			}
 
-			outFilesMap[index] = &outputFile{
+			outfiles[index] = &outputFile{
 				path:           path,
 				length:         file.Length,
 				file:           outfile,
@@ -111,6 +87,7 @@ func (t *Torrent) Download(outpath string) error {
 		}
 
 	} else {
+		outfiles = make([]*outputFile, 1)
 		// check if outpath directory exists
 		if _, err := os.Stat(outpath); os.IsNotExist(err) {
 			err := os.MkdirAll(outpath, 0755)
@@ -127,30 +104,52 @@ func (t *Torrent) Download(outpath string) error {
 			return err
 		}
 
-		outFilesMap[0] = &outputFile{
+		outfiles[0] = &outputFile{
 			file: outfile,
 		}
 
 		defer outfile.Close()
 	}
 
-	for _, peer := range t.Peers {
-		go t.startWorker(peer, workQueue, results)
-	}
+	// store a map of each piece index to the files that it belongs to
+	pieceToFileMap := make(map[int][]*outputFile)
+	lastFileIndex := 0
 
 	for i, pieceHash := range t.PieceHashes {
-		length := t.PieceLength
+		pieceLength := t.getPieceLength(i)
 
-		if i == len(t.PieceHashes)-1 && t.Length%t.PieceLength != 0 {
-			length = t.Length % t.PieceLength
+		pieceStartOffset := i * t.PieceLength
+		pieceEndOffset := pieceStartOffset + pieceLength
+
+		for lastFileIndex < len(outfiles) {
+			file := outfiles[lastFileIndex]
+			fileStartOffset := file.startRange
+			fileEndOffset := file.endRange
+
+			if pieceEndOffset > fileStartOffset && pieceStartOffset < fileEndOffset {
+				pieceToFileMap[i] = append(pieceToFileMap[i], file)
+			}
+
+			if pieceEndOffset == fileEndOffset {
+				lastFileIndex++
+				break
+			} else if pieceEndOffset > fileEndOffset {
+				lastFileIndex++
+			} else {
+				break
+			}
 		}
 
 		workQueue <- &pieceWork{
 			index:  i,
-			length: length,
+			length: pieceLength,
 			hash:   pieceHash,
 		}
 
+	}
+
+	for _, peer := range t.Peers {
+		go t.startWorker(peer, workQueue, results)
 	}
 
 	var piecesDownloaded int
@@ -162,7 +161,7 @@ func (t *Torrent) Download(outpath string) error {
 
 		if !isMultifile {
 			offset := piece.index * t.PieceLength
-			_, err := outFilesMap[0].file.WriteAt(piece.data, int64(offset))
+			_, err := outfiles[0].file.WriteAt(piece.data, int64(offset))
 
 			if err != nil {
 				return err
@@ -170,7 +169,7 @@ func (t *Torrent) Download(outpath string) error {
 
 		} else {
 
-			err := piece.writeToFiles(outFilesMap, t.PieceLength)
+			err := piece.writeToFiles(pieceToFileMap[piece.index], t.PieceLength)
 
 			if err != nil {
 				return err
@@ -185,214 +184,15 @@ func (t *Torrent) Download(outpath string) error {
 	return nil
 }
 
-func (p *pieceResult) writeToFiles(files map[int]*outputFile, pieceLength int) error {
+func (t *Torrent) getPieceLength(pieceIndex int) int {
 
-	pieceOffsetStart := p.index * pieceLength
-	pieceOffsetEnd := pieceOffsetStart + p.length
+	length := t.PieceLength
 
-	bytesWritten := 0
-
-	keysToDelete := make([]int, 0)
-
-	var sortedKeys []int
-
-	for key := range files {
-		sortedKeys = append(sortedKeys, key)
+	if pieceIndex == len(t.PieceHashes)-1 && t.Length%t.PieceLength != 0 {
+		length = t.Length % t.PieceLength
 	}
 
-	sort.Slice(sortedKeys, func(i, j int) bool {
-		return i < j
-	})
-
-	for _, key := range sortedKeys {
-		file := files[key]
-		if pieceOffsetEnd > file.startRange && pieceOffsetStart < file.endRange {
-			fileStart := max(pieceOffsetStart, file.startRange)
-			fileEnd := min(pieceOffsetEnd, file.endRange)
-			writeoffset := fileStart - file.startRange
-
-			// Write the piece data to the file
-			n, err := file.file.WriteAt(p.data[bytesWritten:bytesWritten+(fileEnd-fileStart)], int64(writeoffset))
-			if err != nil {
-				return err
-			}
-
-			bytesWritten += n
-			file.remainingBytes -= n
-
-			// flag file for delete from map if all bytes are written
-			if file.remainingBytes == 0 {
-				keysToDelete = append(keysToDelete, key)
-			}
-
-			if bytesWritten == p.length {
-				break
-			}
-		}
-	}
-
-	for _, key := range keysToDelete {
-		delete(files, key)
-	}
-
-	return nil
-}
-
-func (t *Torrent) startWorker(peer peer.Peer, workQueue chan *pieceWork, resultsChan chan *pieceResult) {
-	client, err := client.New(peer, t.PeerId, t.InfoHash, len(t.PieceHashes))
-
-	if err != nil {
-		// fmt.Printf("Failed to create client for peer %s: %s\n", peer.Address, err.Error())
-		return
-	}
-	defer client.Conn.Close()
-
-	client.SendUnchokeMsg()
-	client.SendInterestedMsg()
-
-	closeChan := make(chan struct{})
-	defer close(closeChan)
-
-	//NOTE: buffered channel length should be decided
-	messageChan := make(chan *messageResult, 30)
-
-	go parseMessageFromConn(client, messageChan, closeChan)
-
-	for work := range workQueue {
-
-		if !client.BitField.HasPiece(work.index) {
-			workQueue <- work
-			continue
-		}
-
-		buffer, err := downloadPiece(client, work, messageChan)
-
-		if err != nil {
-			// fmt.Printf("Failed to download piece %d from peer %s: %s\n", work.index, peer.Address, err.Error())
-			workQueue <- work
-			closeChan <- struct{}{}
-			return
-		}
-
-		// check if hashes are same
-		hash := sha1.Sum(buffer)
-
-		if !bytes.Equal(hash[:], work.hash[:]) {
-			// fmt.Printf("Piece %d from %s has incorrect hash\n", work.index, peer.Address)
-			workQueue <- work
-			continue
-		}
-
-		client.SendHaveMsg(work.index)
-
-		resultsChan <- &pieceResult{
-			index:  work.index,
-			length: work.length,
-			data:   buffer,
-		}
-	}
-}
-
-func downloadPiece(c *client.Client, work *pieceWork, messageChan chan *messageResult) ([]byte, error) {
-
-	var numBlocks, numBlockRecieved, backlog, requested int
-
-	if work.length%maxBlockSize == 0 {
-		numBlocks = work.length / maxBlockSize
-	} else {
-		numBlocks = work.length/maxBlockSize + 1
-	}
-
-	blocksData := make([][]byte, numBlocks)
-
-	for numBlockRecieved < numBlocks {
-
-		if !c.Choked {
-			for backlog < maxBacklog && requested < work.length {
-				blockSize := maxBlockSize
-
-				if work.length-requested < maxBlockSize {
-					blockSize = work.length - requested
-				}
-
-				err := c.SendRequestMsg(work.index, requested, blockSize)
-
-				if err != nil {
-					return nil, err
-				}
-
-				requested += blockSize
-				backlog++
-			}
-		}
-
-		msg := <-messageChan
-
-		if msg == nil {
-			return nil, fmt.Errorf("failed to read message")
-		}
-
-		if msg.id == message.PieceMessageID {
-			blockIndex := int(binary.BigEndian.Uint32(msg.data[4:8])) / maxBlockSize
-			blocksData[blockIndex] = msg.data[8:]
-
-			numBlockRecieved++
-			backlog--
-		}
-
-	}
-
-	return bytes.Join(blocksData, nil), nil
-}
-
-func parseMessageFromConn(client *client.Client, messageResultChan chan *messageResult, closeChan chan struct{}) {
-
-	// Setting a deadline helps get unresponsive peers unstuck.
-	// 20 seconds is more than enough time to download a block
-	client.Conn.SetReadDeadline(time.Now().Add(20 * time.Second))
-
-	for {
-		select {
-		case <-closeChan:
-			return
-		default:
-			msg, err := message.Read(client.Conn)
-
-			if err != nil {
-				messageResultChan <- nil
-				return
-			}
-
-			if msg == nil {
-				// Keep alive message recieved
-				continue
-			}
-
-			result := messageResult{
-				id: msg.ID,
-			}
-
-			switch msg.ID {
-			case message.UnchokeMessageID:
-				client.Choked = false
-			case message.ChokeMessageID:
-				client.Choked = true
-			case message.HaveMessageID:
-				index := int(binary.BigEndian.Uint32(msg.Payload))
-				client.BitField.SetPiece(index)
-			case message.BitfieldMessageID:
-				client.BitField = msg.Payload
-			case message.ExtensionMessageId:
-				// TODO: Handle extension messages
-			case message.PieceMessageID:
-				result.data = msg.Payload
-				// extend the read deadline
-				client.Conn.SetReadDeadline(time.Now().Add(20 * time.Second))
-			}
-
-			messageResultChan <- &result
-		}
-	}
+	return length
 }
 
 func max(a, b int) int {
