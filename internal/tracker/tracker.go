@@ -7,7 +7,7 @@ import (
 	"github.com/codecrafters-io/bittorrent-starter-go/internal/peer"
 )
 
-func GetPeers(announce string, peerId, infoHash []byte, length int) ([]peer.Peer, error) {
+func GetPeers(announce string, infohash [20]byte, peerId []byte, length int) ([]peer.Peer, error) {
 
 	baseUrl, err := url.Parse(announce)
 
@@ -16,9 +16,9 @@ func GetPeers(announce string, peerId, infoHash []byte, length int) ([]peer.Peer
 	}
 
 	if baseUrl.Scheme == "udp" {
-		return getPeersFromUDPTracker(baseUrl, infoHash, peerId, length)
+		return getPeersFromUDPTracker(baseUrl, infohash[:], peerId, length)
 	} else {
-		return getPeersFromHTTPTracker(baseUrl, infoHash, peerId, length)
+		return getPeersFromHTTPTracker(baseUrl, infohash[:], peerId, length)
 	}
 
 }

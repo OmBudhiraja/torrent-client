@@ -25,9 +25,10 @@ type TorrentFile struct {
 	Name        string
 	Files       []p2p.File
 	IsMultiFile bool
+	PeerId      []byte
 }
 
-type bencodeInfo struct {
+type BencodeInfo struct {
 	Name        string `bencode:"name"`
 	Pieces      string `bencode:"pieces"`
 	PieceLength int    `bencode:"piece length"`
@@ -43,10 +44,10 @@ type file struct {
 type bencodeTorrent struct {
 	Announce string             `bencode:"announce"`
 	Info     bencode.RawMessage `bencode:"info"`
-	info     bencodeInfo
+	info     BencodeInfo
 }
 
-func New(path string) (*TorrentFile, error) {
+func New(path string, peerId []byte) (*TorrentFile, error) {
 	file, err := os.Open(path)
 
 	if err != nil {
@@ -71,7 +72,7 @@ func New(path string) (*TorrentFile, error) {
 
 	infoHash := sha1.Sum(bencodeTo.Info)
 
-	infoDict := bencodeInfo{}
+	infoDict := BencodeInfo{}
 
 	err = bencode.DecodeBytes(bencodeTo.Info, &infoDict)
 
@@ -81,7 +82,7 @@ func New(path string) (*TorrentFile, error) {
 
 	bencodeTo.info = infoDict
 
-	pieceHashes, err := bencodeTo.info.pieceHashes()
+	pieceHashes, err := bencodeTo.info.PieceHashes()
 
 	if err != nil {
 		return nil, err
@@ -118,15 +119,14 @@ func New(path string) (*TorrentFile, error) {
 		Name:        bencodeTo.info.Name,
 		Files:       files,
 		IsMultiFile: isMultiFile,
+		PeerId:      peerId,
 	}, nil
 }
 
 func (t *TorrentFile) Download(outpath string) error {
 
-	peerId := []byte("00112233445566778899")
-
 	fmt.Printf("Waiting for peers...")
-	peers, err := tracker.GetPeers(t.Announce, peerId, t.InfoHash[:], t.Length)
+	peers, err := tracker.GetPeers(t.Announce, t.InfoHash, t.PeerId, t.Length)
 	fmt.Printf("\rFound %d peers           \n", len(peers))
 
 	if err != nil {
@@ -144,7 +144,7 @@ func (t *TorrentFile) Download(outpath string) error {
 		PieceHashes: t.PieceHashes,
 		PieceLength: t.PieceLength,
 		Length:      t.Length,
-		PeerId:      peerId,
+		PeerId:      t.PeerId,
 		Files:       t.Files,
 	}
 
@@ -180,7 +180,7 @@ func (t *TorrentFile) String() string {
 	return sb.String()
 }
 
-func (info *bencodeInfo) pieceHashes() ([][20]byte, error) {
+func (info *BencodeInfo) PieceHashes() ([][20]byte, error) {
 	hashLength := 20
 	pieceHashesBytes := []byte(info.Pieces)
 

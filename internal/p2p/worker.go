@@ -5,46 +5,40 @@ import (
 	"crypto/sha1"
 	"encoding/binary"
 	"fmt"
-	"time"
 
 	"github.com/codecrafters-io/bittorrent-starter-go/internal/client"
 	"github.com/codecrafters-io/bittorrent-starter-go/internal/message"
 	"github.com/codecrafters-io/bittorrent-starter-go/internal/peer"
 )
 
-type messageResult struct {
-	id   byte
-	data []byte
-}
-
 func (t *Torrent) startWorker(peer peer.Peer, workQueue chan *pieceWork, resultsChan chan *pieceResult) {
-	client, err := client.New(peer, t.PeerId, t.InfoHash, len(t.PieceHashes))
+	peerClient, err := client.New(peer, t.InfoHash, t.PeerId, len(t.PieceHashes))
 
 	if err != nil {
 		// fmt.Printf("Failed to create client for peer %s: %s\n", peer.Address, err.Error())
 		return
 	}
-	defer client.Conn.Close()
+	defer peerClient.Conn.Close()
 
-	client.SendUnchokeMsg()
-	client.SendInterestedMsg()
+	peerClient.SendUnchokeMsg()
+	peerClient.SendInterestedMsg()
 
 	closeChan := make(chan struct{})
 	defer close(closeChan)
 
 	//NOTE: buffered channel length should be decided
-	messageChan := make(chan *messageResult, 30)
+	messageChan := make(chan *client.MessageResult, 30)
 
-	go parseMessageFromConn(client, messageChan, closeChan)
+	go peerClient.ParsePeerMessage(messageChan, closeChan)
 
 	for work := range workQueue {
 
-		if !client.BitField.HasPiece(work.index) {
+		if !peerClient.BitField.HasPiece(work.index) {
 			workQueue <- work
 			continue
 		}
 
-		buffer, err := downloadPiece(client, work, messageChan)
+		buffer, err := downloadPiece(peerClient, work, messageChan)
 
 		if err != nil {
 			// fmt.Printf("Failed to download piece %d from peer %s: %s\n", work.index, peer.Address, err.Error())
@@ -62,7 +56,7 @@ func (t *Torrent) startWorker(peer peer.Peer, workQueue chan *pieceWork, results
 			continue
 		}
 
-		client.SendHaveMsg(work.index)
+		peerClient.SendHaveMsg(work.index)
 
 		resultsChan <- &pieceResult{
 			index:  work.index,
@@ -72,7 +66,7 @@ func (t *Torrent) startWorker(peer peer.Peer, workQueue chan *pieceWork, results
 	}
 }
 
-func downloadPiece(c *client.Client, work *pieceWork, messageChan chan *messageResult) ([]byte, error) {
+func downloadPiece(c *client.Client, work *pieceWork, messageChan chan *client.MessageResult) ([]byte, error) {
 
 	var numBlocks, numBlockRecieved, backlog, requested int
 
@@ -111,9 +105,9 @@ func downloadPiece(c *client.Client, work *pieceWork, messageChan chan *messageR
 			return nil, fmt.Errorf("failed to read message")
 		}
 
-		if msg.id == message.PieceMessageID {
-			blockIndex := int(binary.BigEndian.Uint32(msg.data[4:8])) / maxBlockSize
-			blocksData[blockIndex] = msg.data[8:]
+		if msg.Id == message.PieceMessageID {
+			blockIndex := int(binary.BigEndian.Uint32(msg.Data[4:8])) / maxBlockSize
+			blocksData[blockIndex] = msg.Data[8:]
 
 			numBlockRecieved++
 			backlog--
@@ -122,54 +116,4 @@ func downloadPiece(c *client.Client, work *pieceWork, messageChan chan *messageR
 	}
 
 	return bytes.Join(blocksData, nil), nil
-}
-
-func parseMessageFromConn(client *client.Client, messageResultChan chan *messageResult, closeChan chan struct{}) {
-
-	// Setting a deadline to get rid of unresponsive peers
-	// 20 seconds is more than enough time to download a block
-	client.Conn.SetReadDeadline(time.Now().Add(20 * time.Second))
-
-	for {
-		select {
-		case <-closeChan:
-			return
-		default:
-			msg, err := message.Read(client.Conn)
-
-			if err != nil {
-				messageResultChan <- nil
-				return
-			}
-
-			if msg == nil {
-				// Keep alive message recieved
-				continue
-			}
-
-			result := messageResult{
-				id: msg.ID,
-			}
-
-			switch msg.ID {
-			case message.UnchokeMessageID:
-				client.Choked = false
-			case message.ChokeMessageID:
-				client.Choked = true
-			case message.HaveMessageID:
-				index := int(binary.BigEndian.Uint32(msg.Payload))
-				client.BitField.SetPiece(index)
-			case message.BitfieldMessageID:
-				client.BitField = msg.Payload
-			case message.ExtensionMessageId:
-				// TODO: Handle extension messages
-			case message.PieceMessageID:
-				result.data = msg.Payload
-				// extend the read deadline
-				client.Conn.SetReadDeadline(time.Now().Add(20 * time.Second))
-			}
-
-			messageResultChan <- &result
-		}
-	}
 }
