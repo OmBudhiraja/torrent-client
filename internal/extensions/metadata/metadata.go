@@ -5,7 +5,7 @@ import (
 	"encoding/binary"
 	"fmt"
 
-	"github.com/codecrafters-io/bittorrent-starter-go/internal/message"
+	"github.com/OmBudhiraja/torrent-client/internal/message"
 	"github.com/zeebo/bencode"
 )
 
@@ -38,11 +38,6 @@ func FormatRequestMsg(peerMetadataExtensionId, piece int) ([]byte, error) {
 	payload := make([]byte, 0)
 
 	payload = append(payload, byte(peerMetadataExtensionId))
-
-	// dictData := map[string]int{
-	// 	"msg_type": int(ExtensionMessageRequestId),
-	// 	"piece":    piece,
-	// }
 
 	dictData := metadataMsgDict{
 		MsgType: int(ExtensionMessageRequestId),

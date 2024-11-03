@@ -4,14 +4,13 @@ import (
 	"bytes"
 	"crypto/sha1"
 	"encoding/binary"
-	"fmt"
 
-	"github.com/codecrafters-io/bittorrent-starter-go/internal/client"
-	"github.com/codecrafters-io/bittorrent-starter-go/internal/message"
-	"github.com/codecrafters-io/bittorrent-starter-go/internal/peer"
+	"github.com/OmBudhiraja/torrent-client/internal/client"
+	"github.com/OmBudhiraja/torrent-client/internal/message"
+	"github.com/OmBudhiraja/torrent-client/internal/peer"
 )
 
-func (t *Torrent) startWorker(peer peer.Peer, workQueue chan *pieceWork, resultsChan chan *pieceResult) {
+func (t *Torrent) StartWorker(peer peer.Peer, workQueue chan *PieceWork, resultsChan chan *PieceResult) {
 	peerClient, err := client.New(peer, t.InfoHash, t.PeerId, len(t.PieceHashes))
 
 	if err != nil {
@@ -19,9 +18,6 @@ func (t *Torrent) startWorker(peer peer.Peer, workQueue chan *pieceWork, results
 		return
 	}
 	defer peerClient.Conn.Close()
-
-	peerClient.SendUnchokeMsg()
-	peerClient.SendInterestedMsg()
 
 	closeChan := make(chan struct{})
 	defer close(closeChan)
@@ -31,17 +27,23 @@ func (t *Torrent) startWorker(peer peer.Peer, workQueue chan *pieceWork, results
 
 	go peerClient.ParsePeerMessage(messageChan, closeChan)
 
-	for work := range workQueue {
+	t.ResumeWorker(peerClient, workQueue, resultsChan, messageChan, closeChan)
+}
 
-		if !peerClient.BitField.HasPiece(work.index) {
+func (t *Torrent) ResumeWorker(c *client.Client, workQueue chan *PieceWork, resultsChan chan *PieceResult, messageChan chan *client.MessageResult, closeChan chan struct{}) {
+	c.SendUnchokeMsg()
+	c.SendInterestedMsg()
+
+	for work := range workQueue {
+		if !c.BitField.HasPiece(work.Index) {
 			workQueue <- work
 			continue
 		}
 
-		buffer, err := downloadPiece(peerClient, work, messageChan)
+		buffer, err := DownloadPiece(c, work, messageChan)
 
 		if err != nil {
-			// fmt.Printf("Failed to download piece %d from peer %s: %s\n", work.index, peer.Address, err.Error())
+			// fmt.Printf("Failed to download piece %d from peer %s: %s\n", work.Index, c.Peer.Address, err.Error())
 			workQueue <- work
 			closeChan <- struct{}{}
 			return
@@ -50,30 +52,30 @@ func (t *Torrent) startWorker(peer peer.Peer, workQueue chan *pieceWork, results
 		// check if hashes are same
 		hash := sha1.Sum(buffer)
 
-		if !bytes.Equal(hash[:], work.hash[:]) {
-			// fmt.Printf("Piece %d from %s has incorrect hash\n", work.index, peer.Address)
+		if !bytes.Equal(hash[:], work.Hash[:]) {
+			// fmt.Printf("Piece %d from %s has incorrect hash\n", work.Index, c.Peer.Address)
 			workQueue <- work
 			continue
 		}
 
-		peerClient.SendHaveMsg(work.index)
+		c.SendHaveMsg(work.Index)
 
-		resultsChan <- &pieceResult{
-			index:  work.index,
-			length: work.length,
-			data:   buffer,
+		resultsChan <- &PieceResult{
+			Index:  work.Index,
+			Length: work.Length,
+			Data:   buffer,
 		}
 	}
 }
 
-func downloadPiece(c *client.Client, work *pieceWork, messageChan chan *client.MessageResult) ([]byte, error) {
+func DownloadPiece(c *client.Client, work *PieceWork, messageChan chan *client.MessageResult) ([]byte, error) {
 
 	var numBlocks, numBlockRecieved, backlog, requested int
 
-	if work.length%maxBlockSize == 0 {
-		numBlocks = work.length / maxBlockSize
+	if work.Length%maxBlockSize == 0 {
+		numBlocks = work.Length / maxBlockSize
 	} else {
-		numBlocks = work.length/maxBlockSize + 1
+		numBlocks = work.Length/maxBlockSize + 1
 	}
 
 	blocksData := make([][]byte, numBlocks)
@@ -81,14 +83,14 @@ func downloadPiece(c *client.Client, work *pieceWork, messageChan chan *client.M
 	for numBlockRecieved < numBlocks {
 
 		if !c.Choked {
-			for backlog < maxBacklog && requested < work.length {
+			for backlog < maxBacklog && requested < work.Length {
 				blockSize := maxBlockSize
 
-				if work.length-requested < maxBlockSize {
-					blockSize = work.length - requested
+				if work.Length-requested < maxBlockSize {
+					blockSize = work.Length - requested
 				}
 
-				err := c.SendRequestMsg(work.index, requested, blockSize)
+				err := c.SendRequestMsg(work.Index, requested, blockSize)
 
 				if err != nil {
 					return nil, err
@@ -101,8 +103,8 @@ func downloadPiece(c *client.Client, work *pieceWork, messageChan chan *client.M
 
 		msg := <-messageChan
 
-		if msg == nil {
-			return nil, fmt.Errorf("failed to read message")
+		if msg.Err != nil {
+			return nil, msg.Err
 		}
 
 		if msg.Id == message.PieceMessageID {

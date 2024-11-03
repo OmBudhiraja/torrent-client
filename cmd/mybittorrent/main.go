@@ -6,12 +6,45 @@ import (
 	"os"
 	"time"
 
-	"github.com/codecrafters-io/bittorrent-starter-go/internal/magnetlink"
-	"github.com/codecrafters-io/bittorrent-starter-go/internal/torrentfile"
+	"github.com/OmBudhiraja/torrent-client/internal/magnetlink"
+	"github.com/OmBudhiraja/torrent-client/internal/torrentfile"
 )
+
+type Downloader interface {
+	Download(outFile string) error
+}
 
 func main() {
 
+	downloader, err := getDownloader()
+
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+
+	now := time.Now()
+
+	var outPath string
+
+	if len(flag.Args()) < 2 {
+		outPath = "."
+	} else {
+		outPath = flag.Args()[1]
+	}
+
+	err = downloader.Download(outPath)
+
+	if err != nil {
+		fmt.Println("Failed to download file: " + err.Error())
+		os.Exit(1)
+	}
+
+	fmt.Printf("Successfully Downloaded to %s in %s\n", outPath, time.Since(now).Round(time.Second).String())
+
+}
+
+func getDownloader() (Downloader, error) {
 	peerId := []byte("00112233445566778899")
 
 	var useMagnetLink bool
@@ -19,24 +52,21 @@ func main() {
 
 	flag.Parse()
 
+	opts := flag.Args()
+
+	if len(opts) == 0 {
+		fmt.Println("Usage: mybittorrent <torrent filepath> <output path>")
+		os.Exit(1)
+	}
+
 	if useMagnetLink {
-		tf, err := magnetlink.New(flag.Arg(0), peerId)
+		mg, err := magnetlink.New(opts[0], peerId)
 
 		if err != nil {
-			fmt.Println("Failed to parse magnet link: " + err.Error())
-			os.Exit(1)
+			return nil, fmt.Errorf("failed to parse magnet link: %s", err.Error())
 		}
 
-		err = tf.Download(os.Args[3])
-
-		if err != nil {
-			fmt.Println("Failed to download file: " + err.Error())
-			os.Exit(1)
-		}
-
-		fmt.Println("Downloaded file")
-
-		return
+		return mg, nil
 	}
 
 	if len(os.Args) < 3 {
@@ -44,25 +74,11 @@ func main() {
 		os.Exit(1)
 	}
 
-	inFile := os.Args[1]
-	outFile := os.Args[2]
-
-	tf, err := torrentfile.New(inFile, peerId)
+	tf, err := torrentfile.New(opts[0], peerId)
 
 	if err != nil {
-		fmt.Println("Failed to parse torrent file: " + err.Error())
-		os.Exit(1)
+		return nil, fmt.Errorf("failed to parse torrent file: %s", err.Error())
 	}
 
-	now := time.Now()
-
-	err = tf.Download(outFile)
-
-	if err != nil {
-		fmt.Println("Failed to download file: " + err.Error())
-		os.Exit(1)
-	}
-
-	fmt.Printf("Downloaded %s to %s in %s\n", inFile, outFile, time.Since(now).Round(time.Second).String())
-
+	return tf, nil
 }

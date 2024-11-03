@@ -1,4 +1,4 @@
-module github.com/codecrafters-io/bittorrent-starter-go
+module github.com/OmBudhiraja/torrent-client
 
 go 1.19
 

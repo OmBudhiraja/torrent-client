@@ -8,7 +8,7 @@ import (
 
 	"github.com/zeebo/bencode"
 
-	"github.com/codecrafters-io/bittorrent-starter-go/internal/peer"
+	"github.com/OmBudhiraja/torrent-client/internal/peer"
 )
 
 type bencodeTrackerResponse struct {

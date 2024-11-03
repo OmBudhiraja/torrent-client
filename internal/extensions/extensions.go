@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"net"
 
-	"github.com/codecrafters-io/bittorrent-starter-go/internal/message"
+	"github.com/OmBudhiraja/torrent-client/internal/message"
 	"github.com/zeebo/bencode"
 )
 
@@ -71,11 +71,8 @@ func ParseHandshakeMessage(data []byte) (*extensionHandshakeT, error) {
 	err := bencode.DecodeBytes(payload, &extensions)
 
 	if err != nil {
-		fmt.Println("this si weird", err)
 		return nil, fmt.Errorf("failed to decode extension handshake message: %s", err.Error())
 	}
-
-	fmt.Printf("Received extension handshake message: %v\n", extensions)
 
 	return &extensions, nil
 }

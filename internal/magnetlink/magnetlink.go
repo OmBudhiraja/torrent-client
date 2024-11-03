@@ -7,13 +7,11 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/codecrafters-io/bittorrent-starter-go/internal/client"
-	"github.com/codecrafters-io/bittorrent-starter-go/internal/extensions"
-	"github.com/codecrafters-io/bittorrent-starter-go/internal/extensions/metadata"
-	"github.com/codecrafters-io/bittorrent-starter-go/internal/message"
-	"github.com/codecrafters-io/bittorrent-starter-go/internal/peer"
-	"github.com/codecrafters-io/bittorrent-starter-go/internal/torrentfile"
-	"github.com/codecrafters-io/bittorrent-starter-go/internal/tracker"
+	"github.com/OmBudhiraja/torrent-client/internal/p2p"
+	"github.com/OmBudhiraja/torrent-client/internal/peer"
+	"github.com/OmBudhiraja/torrent-client/internal/torrentfile"
+	"github.com/OmBudhiraja/torrent-client/internal/tracker"
+	"github.com/OmBudhiraja/torrent-client/pkg/progressbar"
 	"github.com/zeebo/bencode"
 )
 
@@ -21,14 +19,30 @@ const (
 	supportedInfoTypes = "urn:btih:"
 )
 
-func New(magnetLink string, peerId []byte) (*torrentfile.TorrentFile, error) {
-	parsedUrl, err := url.Parse(magnetLink)
+type MagnetLink struct {
+	torrent  *p2p.Torrent
+	dsm      *p2p.DownloadSessionManger
+	infoHash [20]byte
+	peerId   []byte
+	peers    []peer.Peer
+
+	metadataBytesChan      chan []byte
+	isMetataDownloadedChan chan struct{}
+	torrentInitailizedChan chan struct{}
+}
+
+func New(magnetUrl string, peerId []byte) (*MagnetLink, error) {
+	parsedUrl, err := url.Parse(magnetUrl)
 
 	if err != nil {
 		return nil, err
 	}
 
 	trackerUrl := parsedUrl.Query().Get("tr")
+
+	if trackerUrl == "" {
+		return nil, fmt.Errorf("dht magnet links are not supported yet")
+	}
 
 	infoType := parsedUrl.Query().Get("xt")
 
@@ -45,192 +59,110 @@ func New(magnetLink string, peerId []byte) (*torrentfile.TorrentFile, error) {
 	infoHash := [20]byte{}
 	copy(infoHash[:], hash)
 
+	fmt.Printf("Waiting for peers...")
 	peers, err := tracker.GetPeers(trackerUrl, infoHash, peerId, math.MaxInt)
 
 	if err != nil {
-		return nil, fmt.Errorf("failed to get peers: %s", err.Error())
+		fmt.Println()
+		return nil, err
 	}
 
-	metadataBytesChan := make(chan []byte)
-	closeChan := make(chan struct{})
+	fmt.Printf("\rFound %d peers           \n", len(peers))
 
-	for _, peer := range peers {
-		go handlePeer(peer, infoHash, peerId, metadataBytesChan, closeChan)
+	magnetLink := &MagnetLink{
+		infoHash:               infoHash,
+		peerId:                 peerId,
+		peers:                  peers,
+		metadataBytesChan:      make(chan []byte),
+		isMetataDownloadedChan: make(chan struct{}),
+		torrentInitailizedChan: make(chan struct{}),
 	}
 
-	select {
-	case mt, ok := <-metadataBytesChan:
-		if ok {
-			// Signal all other goroutines to stop
-			close(closeChan)
-
-			var info torrentfile.BencodeInfo
-
-			err := bencode.DecodeBytes(mt, &info)
-
-			if err != nil {
-				return nil, fmt.Errorf("failed to decode metadata: %s", err.Error())
-			}
-
-			pieceHashes, err := info.PieceHashes()
-
-			if err != nil {
-				return nil, fmt.Errorf("failed to get piece hashes: %s", err.Error())
-			}
-
-			name := info.Name
-
-			if name == "" {
-				name = "unknown"
-			}
-
-			// Create torrent file from metadata
-			t := &torrentfile.TorrentFile{
-				Announce:    trackerUrl,
-				InfoHash:    infoHash,
-				PieceHashes: pieceHashes,      // TODO: Parse from metadata
-				PieceLength: info.PieceLength, // TODO: Parse from metadata
-				Length:      info.Length,      // TODO: Parse from metadata
-				Name:        name,             // TODO: Parse from metadata
-				Files:       nil,              // TODO: Parse from metadata
-				IsMultiFile: false,
-				PeerId:      peerId,
-			}
-
-			return t, nil
-		}
-	}
-
-	return nil, fmt.Errorf("failed to get metadata")
+	return magnetLink, nil
 }
 
-func handlePeer(peerClient peer.Peer, infoHash [20]byte, peerId []byte, metadataBytesChan chan []byte, closeChan chan struct{}) {
-	c, err := client.New(peerClient, infoHash, peerId, 0)
+func (magnetLink *MagnetLink) Download(outpath string) error {
+
+	for _, peer := range magnetLink.peers {
+		go handlePeer(peer, magnetLink)
+	}
+
+	// wait until one peer has completed metadata download
+	mt := <-magnetLink.metadataBytesChan
+	close(magnetLink.isMetataDownloadedChan)
+
+	err := magnetLink.initializeTorrentFromMetadata(mt, outpath)
 
 	if err != nil {
-		// TODO: handle error
+		return fmt.Errorf("failed to load torrent metadata: %s", err.Error())
 	}
 
-	messageResultChan := make(chan *client.MessageResult)
+	progressbar := progressbar.New(len(magnetLink.torrent.PieceHashes))
 
-	peerCloseChan := make(chan struct{})
-	defer close(peerCloseChan)
+	progressbar.Start()
+	defer progressbar.Finish()
 
-	go c.ParsePeerMessage(messageResultChan, peerCloseChan)
+	dsm, err := magnetLink.torrent.Initiate()
+	magnetLink.dsm = dsm
+	defer dsm.CloseFiles()
 
-	if c.SupportsExtensionProtocol {
-		extensions.SendHandshakeMessage(c.Conn)
+	downloadedPices := 0
+
+	close(magnetLink.torrentInitailizedChan)
+
+	if err != nil {
+		return fmt.Errorf("failed to initiate torrent download: %s", err.Error())
 	}
 
-	var fullMetadata []byte
-	var downloadedMetadataSize int
+	for downloadedPices < len(magnetLink.torrent.PieceHashes) {
+		piece := <-dsm.Results
+		downloadedPices++
 
-	for {
+		err := piece.WriteToFiles(dsm.PieceToFileMap[piece.Index], magnetLink.torrent.PieceLength)
 
-		select {
-		case <-closeChan:
-			return
-		case msg := <-messageResultChan:
-
-			if msg.Err != nil {
-				// TODO: handle error
-				return
-			}
-
-			fmt.Println("client ext", c.SupportedExtension, c.SupportsExtensionProtocol)
-
-			extensionId := msg.Data[0]
-			peerMetadataExtensionId := c.SupportedExtension[metadata.MetadataExtensionName]
-
-			// extension handshake completed
-			if msg.Id == message.ExtensionMessageId && extensionId == extensions.ExtensionHandshakeId {
-
-				// send metadata request message if the peer supports metadata extension
-				if peerMetadataExtensionId == 0 {
-					// peer does not support metadata extension
-					continue
-				}
-
-				var numPieces int
-
-				if c.MetadataSize == 0 {
-					numPieces = 1
-				} else {
-					numPieces = (c.MetadataSize + metadata.PieceSize - 1) / metadata.PieceSize
-				}
-
-				for i := 0; i < numPieces; i++ {
-					metadataRequestMsg, err := metadata.FormatRequestMsg(peerMetadataExtensionId, i)
-
-					if err != nil {
-						fmt.Println("failed to format metadata request message payload", err)
-						return // TODO: handle error
-					}
-
-					_, err = c.Conn.Write(metadataRequestMsg)
-
-					if err != nil {
-						fmt.Println("failed to send metadata request message", err)
-						return // TODO: handle error
-					}
-
-				}
-
-			}
-
-			if msg.Id == message.ExtensionMessageId && extensionId == metadata.MetadataExtensionId {
-				metadataRes, err := metadata.HandleMetadataMsg(msg.Data[1:])
-
-				if err != nil {
-					continue // peer sent invalid metadata message
-				}
-
-				if metadataRes.MsgType == int(metadata.ExtensionMessageRejectId) {
-					// peer rejected the request
-					continue
-				}
-
-				if metadataRes.MsgType == int(metadata.ExtensionMessageRequestId) {
-					// currently not handling request message
-					continue
-				}
-
-				if c.MetadataSize == 0 {
-					c.MetadataSize = metadataRes.TotalSize
-				} else if c.MetadataSize != 0 && c.MetadataSize != metadataRes.TotalSize {
-					// metadata size does not match
-					fmt.Println("metadata size does not match???????")
-					continue
-				}
-
-				if len(fullMetadata) == 0 {
-					fullMetadata = make([]byte, c.MetadataSize)
-				}
-
-				if metadataRes.MsgType == int(metadata.ExtensionMessageDataId) {
-
-					start := metadataRes.Piece * metadata.PieceSize
-					end := start + len(metadataRes.Data)
-
-					copy(fullMetadata[start:end], metadataRes.Data)
-
-					downloadedMetadataSize += len(metadataRes.Data)
-
-					if downloadedMetadataSize == c.MetadataSize {
-						// metadata download completed
-						select {
-						case metadataBytesChan <- fullMetadata:
-						case <-closeChan:
-						}
-						return
-					}
-
-				}
-			}
+		if err != nil {
+			return fmt.Errorf("failed to write piece to file: %s", err.Error())
 		}
 
+		progressbar.Update(downloadedPices)
 	}
 
+	close(dsm.WorkQueue)
+
+	return nil
 }
 
-// func (m *Magnetlink)
+func (magnetLink *MagnetLink) initializeTorrentFromMetadata(metadata []byte, outpath string) error {
+	var info torrentfile.BencodeInfo
+
+	err := bencode.DecodeBytes(metadata, &info)
+
+	if err != nil {
+		return fmt.Errorf("failed to decode metadata: %s", err.Error())
+	}
+
+	pieceHashes, err := info.PieceHashes()
+
+	if err != nil {
+		return fmt.Errorf("failed to get piece hashes: %s", err.Error())
+	}
+
+	_, files := info.IsMultiFile()
+
+	// Create torrent file from metadata
+	t := &p2p.Torrent{
+		InfoHash:    magnetLink.infoHash,
+		PieceHashes: pieceHashes,
+		PieceLength: info.PieceLength,
+		Length:      info.Length,
+		Name:        info.Name,
+		Files:       files,
+		PeerId:      magnetLink.peerId,
+		Peers:       magnetLink.peers,
+		Outpath:     outpath,
+	}
+
+	magnetLink.torrent = t
+
+	return nil
+}

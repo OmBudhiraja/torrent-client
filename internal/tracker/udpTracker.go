@@ -8,7 +8,7 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/codecrafters-io/bittorrent-starter-go/internal/peer"
+	"github.com/OmBudhiraja/torrent-client/internal/peer"
 )
 
 type UPD_TRACKER_ACTION int
@@ -65,7 +65,6 @@ func getPeersFromUDPTracker(baseUrl *url.URL, infoHash, peerId []byte, length in
 		switch action {
 		case UPD_CONNECT_ACTION:
 			// handle connect response
-			fmt.Println("Connect response", n)
 			transactionIdRespone := binary.BigEndian.Uint32(response[4:8])
 			connectionId = binary.BigEndian.Uint64(response[8:16])
 
@@ -83,7 +82,6 @@ func getPeersFromUDPTracker(baseUrl *url.URL, infoHash, peerId []byte, length in
 
 		case UPD_ANNOUNCE_ACTION:
 			// handle announce response
-			fmt.Println("Announce response", n)
 
 			peersBytes, err := parseAnnounceResponse(response[:n], transactionID)
 

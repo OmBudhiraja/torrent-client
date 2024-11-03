@@ -109,7 +109,6 @@ func unmarshalCompact(data []byte) ([]Peer, error) {
 	numPeers := len(data) / peerSize
 
 	if len(data)%peerSize != 0 {
-		fmt.Println(len(data)%peerSize, len(data), data)
 		return nil, fmt.Errorf("invalid peer data")
 	}
 

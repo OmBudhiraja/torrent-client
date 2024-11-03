@@ -4,8 +4,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/codecrafters-io/bittorrent-starter-go/internal/peer"
-	"github.com/codecrafters-io/bittorrent-starter-go/pkg/progressbar"
+	"github.com/OmBudhiraja/torrent-client/internal/peer"
+	"github.com/OmBudhiraja/torrent-client/pkg/progressbar"
 )
 
 const (
@@ -22,6 +22,7 @@ type Torrent struct {
 	Length      int
 	PeerId      []byte
 	Files       []File
+	Outpath     string
 }
 
 type File struct {
@@ -29,42 +30,45 @@ type File struct {
 	Path   string
 }
 
-type outputFile struct {
-	path           string
-	length         int
-	startRange     int
-	endRange       int
-	remainingBytes int
-	file           *os.File
+type OutputFile struct {
+	path       string
+	length     int
+	startRange int
+	endRange   int
+	file       *os.File
 }
 
-func (t *Torrent) Download(outpath string) error {
-	workQueue := make(chan *pieceWork, len(t.PieceHashes))
-	results := make(chan *pieceResult)
+type DownloadSessionManger struct {
+	WorkQueue      chan *PieceWork
+	Results        chan *PieceResult
+	Outfiles       []*OutputFile
+	PieceToFileMap map[int][]*OutputFile
+	T              *Torrent
+}
+
+func (t *Torrent) Initiate() (*DownloadSessionManger, error) {
+
+	workQueue := make(chan *PieceWork, len(t.PieceHashes))
+	results := make(chan *PieceResult)
 
 	isMultifile := len(t.Files) > 0
 
-	var outfiles []*outputFile
-
-	progressbar := progressbar.New(len(t.PieceHashes))
-
-	progressbar.Start()
-	defer progressbar.Finish()
+	var outfiles []*OutputFile
 
 	if isMultifile {
-		outfiles = make([]*outputFile, len(t.Files))
+		outfiles = make([]*OutputFile, len(t.Files))
 		for index, file := range t.Files {
-			path := filepath.Join(outpath, t.Name, file.Path)
+			path := filepath.Join(t.Outpath, t.Name, file.Path)
 			err := os.MkdirAll(filepath.Dir(path), 0755)
 
 			if err != nil {
-				return err
+				return nil, err
 			}
 
 			outfile, err := os.Create(path)
 
 			if err != nil {
-				return err
+				return nil, err
 			}
 
 			startRange := 0
@@ -73,46 +77,45 @@ func (t *Torrent) Download(outpath string) error {
 				startRange = outfiles[index-1].endRange
 			}
 
-			outfiles[index] = &outputFile{
-				path:           path,
-				length:         file.Length,
-				file:           outfile,
-				startRange:     startRange,
-				remainingBytes: file.Length,
-				endRange:       startRange + file.Length,
+			outfiles[index] = &OutputFile{
+				path:       path,
+				length:     file.Length,
+				file:       outfile,
+				startRange: startRange,
+				endRange:   startRange + file.Length,
 			}
-
-			defer outfile.Close()
 
 		}
 
 	} else {
-		outfiles = make([]*outputFile, 1)
+		outfiles = make([]*OutputFile, 1)
 		// check if outpath directory exists
-		if _, err := os.Stat(outpath); os.IsNotExist(err) {
-			err := os.MkdirAll(outpath, 0755)
+		if _, err := os.Stat(t.Outpath); os.IsNotExist(err) {
+			err := os.MkdirAll(t.Outpath, 0755)
 
 			if err != nil {
-				return err
+				return nil, err
 			}
 		}
 
-		filePath := filepath.Join(outpath, t.Name)
+		filePath := filepath.Join(t.Outpath, t.Name)
 		outfile, err := os.Create(filePath)
 
 		if err != nil {
-			return err
+			return nil, err
 		}
 
-		outfiles[0] = &outputFile{
-			file: outfile,
+		outfiles[0] = &OutputFile{
+			file:       outfile,
+			startRange: 0,
+			endRange:   t.Length,
+			length:     t.Length,
 		}
 
-		defer outfile.Close()
 	}
 
 	// store a map of each piece index to the files that it belongs to
-	pieceToFileMap := make(map[int][]*outputFile)
+	pieceToFileMap := make(map[int][]*OutputFile)
 	lastFileIndex := 0
 
 	for i, pieceHash := range t.PieceHashes {
@@ -140,46 +143,57 @@ func (t *Torrent) Download(outpath string) error {
 			}
 		}
 
-		workQueue <- &pieceWork{
-			index:  i,
-			length: pieceLength,
-			hash:   pieceHash,
+		workQueue <- &PieceWork{
+			Index:  i,
+			Length: pieceLength,
+			Hash:   pieceHash,
 		}
 
 	}
 
+	return &DownloadSessionManger{
+		WorkQueue:      workQueue,
+		Results:        results,
+		Outfiles:       outfiles,
+		PieceToFileMap: pieceToFileMap,
+	}, nil
+}
+
+func (t *Torrent) Download() error {
+
+	progressbar := progressbar.New(len(t.PieceHashes))
+
+	progressbar.Start()
+	defer progressbar.Finish()
+
+	dsm, err := t.Initiate()
+
+	if err != nil {
+		return err
+	}
+
+	defer dsm.CloseFiles()
+
 	for _, peer := range t.Peers {
-		go t.startWorker(peer, workQueue, results)
+		go t.StartWorker(peer, dsm.WorkQueue, dsm.Results)
 	}
 
 	var piecesDownloaded int
 
 	for piecesDownloaded < len(t.PieceHashes) {
-		piece := <-results
-
+		piece := <-dsm.Results
 		piecesDownloaded++
 
-		if !isMultifile {
-			offset := piece.index * t.PieceLength
-			_, err := outfiles[0].file.WriteAt(piece.data, int64(offset))
+		err = piece.WriteToFiles(dsm.PieceToFileMap[piece.Index], t.PieceLength)
 
-			if err != nil {
-				return err
-			}
-
-		} else {
-
-			err := piece.writeToFiles(pieceToFileMap[piece.index], t.PieceLength)
-
-			if err != nil {
-				return err
-			}
+		if err != nil {
+			return err
 		}
 
 		progressbar.Update(piecesDownloaded)
 	}
 
-	close(workQueue)
+	close(dsm.WorkQueue)
 
 	return nil
 }
@@ -195,17 +209,8 @@ func (t *Torrent) getPieceLength(pieceIndex int) int {
 	return length
 }
 
-func max(a, b int) int {
-	if a > b {
-		return a
+func (dsm *DownloadSessionManger) CloseFiles() {
+	for _, file := range dsm.Outfiles {
+		file.file.Close()
 	}
-	return b
-}
-
-// Helper function to get the minimum of two integers
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }

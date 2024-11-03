@@ -4,10 +4,10 @@ import (
 	"encoding/binary"
 	"net"
 
-	"github.com/codecrafters-io/bittorrent-starter-go/internal/bitfield"
-	"github.com/codecrafters-io/bittorrent-starter-go/internal/extensions"
-	"github.com/codecrafters-io/bittorrent-starter-go/internal/message"
-	"github.com/codecrafters-io/bittorrent-starter-go/internal/peer"
+	"github.com/OmBudhiraja/torrent-client/internal/bitfield"
+	"github.com/OmBudhiraja/torrent-client/internal/extensions"
+	"github.com/OmBudhiraja/torrent-client/internal/message"
+	"github.com/OmBudhiraja/torrent-client/internal/peer"
 )
 
 type Client struct {

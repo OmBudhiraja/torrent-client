@@ -4,22 +4,22 @@ import (
 	"fmt"
 )
 
-type pieceWork struct {
-	index  int
-	length int
-	hash   [20]byte
+type PieceWork struct {
+	Index  int
+	Length int
+	Hash   [20]byte
 }
 
-type pieceResult struct {
-	index  int
-	length int
-	data   []byte
+type PieceResult struct {
+	Index  int
+	Length int
+	Data   []byte
 }
 
-func (p *pieceResult) writeToFiles(files []*outputFile, pieceLength int) error {
+func (p *PieceResult) WriteToFiles(files []*OutputFile, pieceLength int) error {
 
-	pieceOffsetStart := p.index * pieceLength
-	pieceOffsetEnd := pieceOffsetStart + p.length
+	pieceOffsetStart := p.Index * pieceLength
+	pieceOffsetEnd := pieceOffsetStart + p.Length
 
 	bytesWritten := 0
 
@@ -29,19 +29,32 @@ func (p *pieceResult) writeToFiles(files []*outputFile, pieceLength int) error {
 		writeoffset := fileStart - file.startRange
 
 		// Write the piece data to the file
-		n, err := file.file.WriteAt(p.data[bytesWritten:bytesWritten+(fileEnd-fileStart)], int64(writeoffset))
+		n, err := file.file.WriteAt(p.Data[bytesWritten:bytesWritten+(fileEnd-fileStart)], int64(writeoffset))
 		if err != nil {
 			return err
 		}
 
 		bytesWritten += n
-		file.remainingBytes -= n
 
 	}
 
-	if bytesWritten != p.length {
-		return fmt.Errorf("failed to write data to files, piece index: %d, piece length: %d, bytes written: %d", p.index, p.length, bytesWritten)
+	if bytesWritten != p.Length {
+		return fmt.Errorf("failed to write data to files, piece index: %d, piece length: %d, bytes written: %d", p.Index, p.Length, bytesWritten)
 	}
 
 	return nil
+}
+
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }

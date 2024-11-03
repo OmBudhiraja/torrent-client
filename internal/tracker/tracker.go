@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"net/url"
 
-	"github.com/codecrafters-io/bittorrent-starter-go/internal/peer"
+	"github.com/OmBudhiraja/torrent-client/internal/peer"
 )
 
 func GetPeers(announce string, infohash [20]byte, peerId []byte, length int) ([]peer.Peer, error) {
