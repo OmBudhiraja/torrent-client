@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 
+	"github.com/OmBudhiraja/torrent-client/internal/extensions/metadata"
 	"github.com/OmBudhiraja/torrent-client/internal/message"
 	"github.com/zeebo/bencode"
 )
@@ -15,7 +16,7 @@ const (
 
 var (
 	supportedExtensions = map[string]int{
-		"ut_metadata": 1, // Metadata extension id for our peer
+		metadata.MetadataExtensionName: int(metadata.MetadataExtensionId), // Metadata extension id for our peer
 	}
 )
 

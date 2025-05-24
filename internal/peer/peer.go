@@ -86,22 +86,28 @@ func (p Peer) CompleteHandshake(infoHash []byte, peerId []byte) (*HandshakeRespo
 	}, nil
 }
 
+type uncompactPeer struct {
+	Ip   string `bencode:"ip"`
+	Port int    `bencode:"port"`
+}
+
 func Unmarshal(data []byte) ([]Peer, error) {
 
 	if len(data) == 0 {
 		return []Peer{}, nil
 	}
 
-	if data[0] == 'l' {
-		return unmarshalNonCompact(data)
-	} else {
-		var out []byte
-		err := bencode.DecodeString(string(data), &out)
-		if err != nil {
-			return nil, fmt.Errorf("failed to decode peers response: %s", err.Error())
-		}
-		return unmarshalCompact(out)
+	var decodedPeers []uncompactPeer
+
+	// decode the bytes into a list of uncompact peers, it means that peers are in non-compact format
+	err := bencode.DecodeBytes(data, &decodedPeers)
+
+	if err != nil {
+		return unmarshalCompact(data)
 	}
+
+	return unmarshalNonCompact(decodedPeers)
+
 }
 
 func unmarshalCompact(data []byte) ([]Peer, error) {
@@ -123,20 +129,7 @@ func unmarshalCompact(data []byte) ([]Peer, error) {
 	return peers, nil
 }
 
-type uncompactPeer struct {
-	Ip   string `bencode:"ip"`
-	Port int    `bencode:"port"`
-}
-
-func unmarshalNonCompact(data []byte) ([]Peer, error) {
-
-	var decodedPeers []uncompactPeer
-
-	err := bencode.DecodeBytes(data, &decodedPeers)
-
-	if err != nil {
-		return nil, fmt.Errorf("failed to unmarshal peers: %s", err.Error())
-	}
+func unmarshalNonCompact(decodedPeers []uncompactPeer) ([]Peer, error) {
 
 	peers := make([]Peer, len(decodedPeers))
 

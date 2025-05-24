@@ -8,7 +8,9 @@ A simple BitTorrent Client written in Go.
 
 - [BitTorrent Protocol Specification](https://www.bittorrent.org/beps/bep_0003.html)
 
-- [BitTorrent Economic Paper](http://bittorrent.org/bittorrentecon.pdf)
+- [Magnet Uri Extension](https://www.bittorrent.org/beps/bep_0009.html)
+
+- [UDP Tracker Protocol](https://www.bittorrent.org/beps/bep_0015.html)
 
 ### Run locally
 

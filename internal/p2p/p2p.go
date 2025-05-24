@@ -31,7 +31,6 @@ type File struct {
 }
 
 type OutputFile struct {
-	path       string
 	length     int
 	startRange int
 	endRange   int
@@ -78,7 +77,6 @@ func (t *Torrent) Initiate() (*DownloadSessionManger, error) {
 			}
 
 			outfiles[index] = &OutputFile{
-				path:       path,
 				length:     file.Length,
 				file:       outfile,
 				startRange: startRange,

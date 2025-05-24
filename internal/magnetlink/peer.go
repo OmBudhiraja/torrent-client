@@ -22,10 +22,6 @@ func handlePeer(peerClient peer.Peer, magnetLink *MagnetLink) {
 
 	go c.ParsePeerMessage(messageResultChan, peerCloseChan)
 
-	if c.SupportsExtensionProtocol {
-		extensions.SendHandshakeMessage(c.Conn)
-	}
-
 	var fullMetadata []byte
 	var downloadedMetadataSize int
 
@@ -42,15 +38,19 @@ outerLoop:
 				return
 			}
 
+			if msg.Id != message.ExtensionMessageId {
+				continue
+			}
+
 			extensionId := msg.Data[0]
 			peerMetadataExtensionId := c.SupportedExtension[metadata.MetadataExtensionName]
 
 			// extension handshake completed
-			if msg.Id == message.ExtensionMessageId && extensionId == extensions.ExtensionHandshakeId {
+			// send metadata request message if the peer supports metadata extension
+			if extensionId == extensions.ExtensionHandshakeId {
 
-				// send metadata request message if the peer supports metadata extension
+				// peer does not support metadata extension
 				if peerMetadataExtensionId == 0 {
-					// peer does not support metadata extension
 					continue
 				}
 
@@ -81,7 +81,7 @@ outerLoop:
 
 			}
 
-			if msg.Id == message.ExtensionMessageId && extensionId == metadata.MetadataExtensionId {
+			if extensionId == metadata.MetadataExtensionId {
 				metadataRes, err := metadata.HandleMetadataMsg(msg.Data[1:])
 
 				if err != nil {
